@@ -13,3 +13,6 @@ class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()
+
+# Minimum gap between consecutive comments posted from the same Threads account.
+ACCOUNT_COMMENT_COOLDOWN_SECONDS = 45

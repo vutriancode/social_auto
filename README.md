@@ -1,4 +1,4 @@
-# Hệ thống Quản lý Chiến dịch Social Comment (X & Threads)
+# Auto Social - Hệ thống Quản lý Chiến dịch Social Comment (X & Threads)
 
 Hệ thống quản lý chiến dịch comment tự động và bất đồng bộ, tối ưu hiệu suất với bộ điều phối chiến dịch (Campaign Orchestrator), hệ thống hàng đợi Redis Queue, bộ xử lý Worker chạy nền với cơ chế tự động giới hạn rate limit và tự động retry (exponential backoff).
 

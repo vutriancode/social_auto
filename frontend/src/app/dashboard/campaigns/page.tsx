@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import Pagination from "../../../components/Pagination";
+import { getApiBase } from "../../../lib/apiBase";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8099";
+const API_BASE = getApiBase();
 
 const collectStrings = (value) => {
   if (typeof value === "string") return [value];
@@ -209,22 +210,18 @@ export default function Campaigns() {
   const loadDetails = async (campaign) => {
     selectedCampaignIdRef.current = campaign.id;
     try {
-      const updated = await apiFetch(`/api/campaigns/${campaign.id}`);
+      const [updated, urls, tpls, jobs] = await Promise.all([
+        apiFetch(`/api/campaigns/${campaign.id}`),
+        apiFetch(`/api/campaigns/${campaign.id}/urls`),
+        apiFetch(`/api/campaigns/${campaign.id}/templates`),
+        apiFetch(`/api/jobs?campaign_id=${campaign.id}`),
+      ]);
       if (selectedCampaignIdRef.current !== campaign.id) return;
       setSelectedCampaign(updated);
-      
-      const urls = await apiFetch(`/api/campaigns/${campaign.id}/urls`);
-      if (selectedCampaignIdRef.current !== campaign.id) return;
       setCampaignUrls(urls);
-      
-      const tpls = await apiFetch(`/api/campaigns/${campaign.id}/templates`);
-      if (selectedCampaignIdRef.current !== campaign.id) return;
       setCampaignTemplates(tpls);
-      
-      const jobs = await apiFetch(`/api/jobs?campaign_id=${campaign.id}`);
-      if (selectedCampaignIdRef.current !== campaign.id) return;
       setCampaignJobs(jobs);
-      
+
       // Load accounts for the campaign's platform
       const accs = await apiFetch(`/api/accounts?platform=${updated.platform}`);
       if (selectedCampaignIdRef.current !== campaign.id) return;
@@ -242,20 +239,16 @@ export default function Campaigns() {
     
     const refreshData = async () => {
       try {
-        const updated = await apiFetch(`/api/campaigns/${campaignId}`);
+        const [updated, urls, tpls, jobs] = await Promise.all([
+          apiFetch(`/api/campaigns/${campaignId}`),
+          apiFetch(`/api/campaigns/${campaignId}/urls`),
+          apiFetch(`/api/campaigns/${campaignId}/templates`),
+          apiFetch(`/api/jobs?campaign_id=${campaignId}`),
+        ]);
         if (!active) return;
         setSelectedCampaign(updated);
-        
-        const urls = await apiFetch(`/api/campaigns/${campaignId}/urls`);
-        if (!active) return;
         setCampaignUrls(urls);
-        
-        const tpls = await apiFetch(`/api/campaigns/${campaignId}/templates`);
-        if (!active) return;
         setCampaignTemplates(tpls);
-        
-        const jobs = await apiFetch(`/api/jobs?campaign_id=${campaignId}`);
-        if (!active) return;
         setCampaignJobs(jobs);
       } catch (err) {
         console.warn("Poll details error:", err);

@@ -8,7 +8,7 @@ const outfit = Outfit({
 });
 
 export const metadata = {
-  title: "Social Comment Campaign System",
+  title: "Auto Social",
   description: "Automate and monitor social media comment campaigns on X and Threads",
 };
 

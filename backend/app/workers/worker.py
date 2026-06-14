@@ -7,7 +7,9 @@ import redis.asyncio as redis
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
-from app.core.config import settings
+from app.core.config import settings, ACCOUNT_COMMENT_COOLDOWN_SECONDS
+from app.core.time_utils import parse_to_naive_utc
+from app.core.job_scheduling import build_account_cooldown_tracker, reserve_account_schedule
 from app.services.social_mock import (
     SocialAuthError,
     SocialCheckpointError,
@@ -25,7 +27,6 @@ logger = logging.getLogger("worker")
 IMMEDIATE_QUEUE = "campaign_jobs_queue"
 REFRESH_QUEUE = "account_refresh_queue"
 SCHEDULED_QUEUE = "campaign_jobs_scheduled"
-ACCOUNT_COMMENT_COOLDOWN_SECONDS = 45
 
 
 def normalize_monitor_page_urls(campaign: dict) -> list[str]:
@@ -70,30 +71,6 @@ def spin_spintax(text: str) -> str:
         options = match.group(1).split('|')
         text = text.replace(match.group(0), random.choice(options), 1)
     return text
-
-
-def parse_to_naive_utc(val) -> datetime:
-    """
-    Converts a datetime object or ISO string (with or without timezone offset/Z)
-    to a timezone-naive UTC datetime object.
-    """
-    if not val:
-        return None
-    if isinstance(val, str):
-        try:
-            if val.endswith("Z"):
-                val = val[:-1] + "+00:00"
-            dt = datetime.fromisoformat(val)
-            if dt.tzinfo is not None:
-                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-            return dt
-        except Exception:
-            return datetime.utcnow()
-    elif isinstance(val, datetime):
-        if val.tzinfo is not None:
-            return val.astimezone(timezone.utc).replace(tzinfo=None)
-        return val
-    return datetime.utcnow()
 
 
 class Worker:
@@ -676,6 +653,12 @@ class Worker:
             if acc_id_str in assigned_counts:
                 assigned_counts[acc_id_str] += 1
 
+        # For Threads, pre-calculate per-account cooldown spacing so newly created
+        # jobs aren't queued immediately and then reactively rescheduled by the
+        # worker for hitting the inter-comment cooldown.
+        now = datetime.utcnow()
+        cooldown_tracker = build_account_cooldown_tracker(valid_accounts, active_jobs, now)
+
         # Concurrent Polling with Semaphore & Account Rotation (Option 2)
         MAX_CONCURRENT_MONITOR_SCANS = 10
         sem = asyncio.Semaphore(MAX_CONCURRENT_MONITOR_SCANS)
@@ -787,14 +770,18 @@ class Worker:
             account = min(valid_accounts, key=lambda a: assigned_counts[str(a["_id"])])
             assigned_counts[str(account["_id"])] += 1
 
+            scheduled_time, is_delayed = reserve_account_schedule(
+                cooldown_tracker, str(account["_id"]), platform, now
+            )
+
             job_doc = {
                 "campaign_id": campaign_id,
                 "account_id": account["_id"],
                 "url_id": target_url["_id"],
                 "template_id": template["_id"],
-                "status": "QUEUED",
+                "status": "RETRYING" if is_delayed else "QUEUED",
                 "attempt_count": 0,
-                "scheduled_time": datetime.utcnow(),
+                "scheduled_time": scheduled_time,
                 "started_at": None,
                 "completed_at": None,
                 "error_message": None,
@@ -803,7 +790,10 @@ class Worker:
             result_job = await db.jobs.insert_one(job_doc)
             job_id_str = str(result_job.inserted_id)
 
-            await self.redis_client.rpush(IMMEDIATE_QUEUE, job_id_str)
+            if is_delayed:
+                await self.redis_client.zadd(SCHEDULED_QUEUE, {job_id_str: scheduled_time.timestamp()})
+            else:
+                await self.redis_client.rpush(IMMEDIATE_QUEUE, job_id_str)
             jobs_enqueued += 1
             logger.info(
                 f"Enqueued job {job_id_str} for monitored post: {target_url['url']} "
@@ -941,6 +931,12 @@ class Worker:
             if acc_id_str in assigned_counts:
                 assigned_counts[acc_id_str] += 1
 
+        # For Threads, pre-calculate per-account cooldown spacing so newly created
+        # jobs aren't queued immediately and then reactively rescheduled by the
+        # worker for hitting the inter-comment cooldown.
+        now = datetime.utcnow()
+        cooldown_tracker = build_account_cooldown_tracker(valid_accounts, active_jobs_global, now)
+
         jobs_enqueued = 0
         template_cursor = int(campaign.get("comment_template_cursor") or 0) % len(templates)
         for target_url in target_urls:
@@ -953,14 +949,19 @@ class Worker:
                 account = min(valid_accounts, key=lambda a: assigned_counts[str(a["_id"])])
 
             assigned_counts[str(account["_id"])] += 1
+
+            scheduled_time, is_delayed = reserve_account_schedule(
+                cooldown_tracker, str(account["_id"]), platform, now
+            )
+
             job_doc = {
                 "campaign_id": campaign_id,
                 "account_id": account["_id"],
                 "url_id": target_url["_id"],
                 "template_id": template["_id"],
-                "status": "QUEUED",
+                "status": "RETRYING" if is_delayed else "QUEUED",
                 "attempt_count": 0,
-                "scheduled_time": datetime.utcnow(),
+                "scheduled_time": scheduled_time,
                 "started_at": None,
                 "completed_at": None,
                 "error_message": None,
@@ -972,7 +973,10 @@ class Worker:
                 {"_id": target_url["_id"]},
                 {"$set": {"status": "PROCESSING", "error_message": None, "processed_at": None}}
             )
-            await self.redis_client.rpush(IMMEDIATE_QUEUE, job_id_str)
+            if is_delayed:
+                await self.redis_client.zadd(SCHEDULED_QUEUE, {job_id_str: scheduled_time.timestamp()})
+            else:
+                await self.redis_client.rpush(IMMEDIATE_QUEUE, job_id_str)
             jobs_enqueued += 1
 
         if jobs_enqueued:

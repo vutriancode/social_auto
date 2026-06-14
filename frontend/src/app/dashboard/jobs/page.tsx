@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import Pagination from "../../../components/Pagination";
+import { getApiBase } from "../../../lib/apiBase";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8099";
+const API_BASE = getApiBase();
 
 export default function Jobs() {
   const [jobs, setJobs] = useState([]);

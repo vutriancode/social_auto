@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     await queue_service.disconnect()
 
 app = FastAPI(
-    title="Social Comment Campaign Management System API",
+    title="Auto Social API",
     description="Backend service for managing automated comment campaigns on X/Threads",
     version="1.0.0",
     lifespan=lifespan,
@@ -36,15 +36,11 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
-# Set CORS
+# Set CORS - allow any host on the frontend's dev/prod ports so the app
+# works from localhost, LAN IPs, or a public IP without per-server config.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3099",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3099",
-    ],
+    allow_origin_regex=r"^https?://[^/]+:(3000|3099)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,6 +57,6 @@ app.include_router(dashboard.router, prefix="/api")
 def read_root():
     return {
         "status": "online",
-        "service": "Social Comment Campaign Management API",
+        "service": "Auto Social API",
         "documentation": "/docs"
     }

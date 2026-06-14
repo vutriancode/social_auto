@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { getApiBase } from "../../lib/apiBase";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8099";
+const API_BASE = getApiBase();
 
 export default function Login() {
   const router = useRouter();
@@ -108,7 +109,7 @@ export default function Login() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
             </svg>
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 leading-none">DragonZux Social</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 leading-none">Auto Social</h1>
           <p className="text-gray-500 text-[10px] font-bold uppercase tracking-widest mt-2">Hệ thống điều phối bình luận</p>
         </div>
 
@@ -161,32 +162,6 @@ export default function Login() {
           >
             {isRegistering ? "Đã có tài khoản? Đăng nhập ngay" : "Chưa có tài khoản? Tạo tài khoản mới"}
           </button>
-        </div>
-
-        <div className="mt-6 border-t border-gray-200 pt-5 text-center">
-          <p className="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest mb-3">Đăng nhập nhanh phát triển</p>
-          <div className="flex justify-center space-x-3">
-            <button
-              onClick={() => {
-                setUsername("admin");
-                setPassword("admin123");
-                setIsRegistering(false);
-              }}
-              className="h-10 bg-white hover:bg-gray-50 border-2 border-gray-200 rounded-md px-4 text-xs font-bold text-gray-700 transition-all duration-150 cursor-pointer"
-            >
-              Admin
-            </button>
-            <button
-              onClick={() => {
-                setUsername("operator");
-                setPassword("operator123");
-                setIsRegistering(false);
-              }}
-              className="h-10 bg-white hover:bg-gray-50 border-2 border-gray-200 rounded-md px-4 text-xs font-bold text-gray-700 transition-all duration-150 cursor-pointer"
-            >
-              Operator
-            </button>
-          </div>
         </div>
 
       </div>

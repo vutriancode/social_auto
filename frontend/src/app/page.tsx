@@ -20,7 +20,7 @@ export default function Home() {
       <div className="flex flex-col items-center space-y-4">
         {/* Animated Loading flat shape */}
         <div className="w-12 h-12 rounded-md bg-[#3B82F6] shadow-none animate-bounce" />
-        <p className="font-bold text-lg text-gray-900 tracking-wide">Đang tải DragonZux Social...</p>
+        <p className="font-bold text-lg text-gray-900 tracking-wide">Đang tải Auto Social...</p>
       </div>
     </div>
   );

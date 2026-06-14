@@ -12,6 +12,7 @@ from app.schemas import (
 )
 from app.api.routes.auth import get_current_user, write_audit_log
 from app.services.queue_service import queue_service
+from app.core.job_scheduling import build_account_cooldown_tracker, reserve_account_schedule
 
 router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 
@@ -897,15 +898,7 @@ async def start_campaign(
         raise HTTPException(status_code=409, detail="Campaign state changed. Please refresh and try again.")
     
     jobs_to_enqueue = []
-    
-    # 1. Check if we have existing paused/pending jobs to resume
-    resumable_jobs = await db.jobs.find({"campaign_id": campaign_oid, "status": "PENDING"}).to_list(length=1000)
-    if resumable_jobs:
-        for job in resumable_jobs:
-            await db.jobs.update_one({"_id": job["_id"]}, {"$set": {"status": "QUEUED"}})
-            await queue_service.enqueue_job(str(job["_id"]))
-            jobs_to_enqueue.append(str(job["_id"]))
-            
+
     # Load-Balanced Account tracking: counts active jobs for each account
     assigned_counts = {str(acc["_id"]): 0 for acc in accounts}
     active_jobs = await db.jobs.find({
@@ -915,6 +908,37 @@ async def start_campaign(
         acc_id_str = str(job["account_id"])
         if acc_id_str in assigned_counts:
             assigned_counts[acc_id_str] += 1
+
+    # For Threads, pre-calculate per-account cooldown spacing so jobs aren't
+    # queued immediately and then reactively rescheduled by the worker for
+    # hitting the inter-comment cooldown.
+    now = datetime.utcnow()
+    cooldown_tracker = build_account_cooldown_tracker(accounts, active_jobs, now)
+
+    # 1. Check if we have existing paused/pending jobs to resume
+    resumable_jobs = await db.jobs.find({"campaign_id": campaign_oid, "status": "PENDING"}).to_list(length=1000)
+    for job in resumable_jobs:
+        acc_id_str = str(job["account_id"])
+        if acc_id_str in assigned_counts:
+            assigned_counts[acc_id_str] += 1
+
+        scheduled_time, is_delayed = reserve_account_schedule(
+            cooldown_tracker, acc_id_str, campaign["platform"], now
+        )
+
+        await db.jobs.update_one(
+            {"_id": job["_id"]},
+            {"$set": {
+                "status": "RETRYING" if is_delayed else "QUEUED",
+                "scheduled_time": scheduled_time,
+                "error_message": None,
+            }}
+        )
+        if is_delayed:
+            await queue_service.schedule_job(str(job["_id"]), scheduled_time.timestamp())
+        else:
+            await queue_service.enqueue_job(str(job["_id"]))
+        jobs_to_enqueue.append(str(job["_id"]))
 
     # 2. Create one job per URL, advancing comment templates sequentially across runs.
     template_cursor = int(campaign.get("comment_template_cursor") or 0) % len(templates)
@@ -937,17 +961,21 @@ async def start_campaign(
             account = assigned_account if assigned_account else min(accounts, key=lambda a: assigned_counts[str(a["_id"])])
         else:
             account = min(accounts, key=lambda a: assigned_counts[str(a["_id"])])
-            
+
         assigned_counts[str(account["_id"])] += 1
-        
+
+        scheduled_time, is_delayed = reserve_account_schedule(
+            cooldown_tracker, str(account["_id"]), campaign["platform"], now
+        )
+
         job_doc = {
             "campaign_id": campaign_oid,
             "account_id": account["_id"],
             "url_id": target_url["_id"],
             "template_id": template["_id"],
-            "status": "QUEUED",
+            "status": "RETRYING" if is_delayed else "QUEUED",
             "attempt_count": 0,
-            "scheduled_time": datetime.utcnow(),
+            "scheduled_time": scheduled_time,
             "started_at": None,
             "completed_at": None,
             "error_message": None,
@@ -956,12 +984,15 @@ async def start_campaign(
 
         result = await db.jobs.insert_one(job_doc)
         job_id_str = str(result.inserted_id)
-        
+
         # Update target URL to PROCESSING
         await db.target_urls.update_one({"_id": target_url["_id"]}, {"$set": {"status": "PROCESSING"}})
-        
-        # Enqueue to Redis
-        await queue_service.enqueue_job(job_id_str)
+
+        # Enqueue to Redis - immediately if due now, otherwise scheduled for later
+        if is_delayed:
+            await queue_service.schedule_job(job_id_str, scheduled_time.timestamp())
+        else:
+            await queue_service.enqueue_job(job_id_str)
         jobs_to_enqueue.append(job_id_str)
         created_job_count += 1
 

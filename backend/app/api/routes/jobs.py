@@ -7,6 +7,7 @@ from app.db.database import get_db
 from app.schemas import JobOut, serialize_doc, serialize_docs
 from app.api.routes.auth import get_current_user, write_audit_log
 from app.services.queue_service import queue_service
+from app.core.job_scheduling import build_account_cooldown_tracker, reserve_account_schedule
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
@@ -248,22 +249,38 @@ async def retry_all_failed_campaign_jobs(
     failed_jobs = await db.jobs.find({"campaign_id": ObjectId(campaign_id), "status": "FAILED"}).to_list(length=1000)
     if not failed_jobs:
         return {"message": "No failed jobs found for this campaign"}
-        
+
+    # For Threads, pre-calculate per-account cooldown spacing so retried jobs
+    # aren't queued immediately and then reactively rescheduled by the worker
+    # for hitting the inter-comment cooldown.
+    accounts = await db.accounts.find({"platform": campaign["platform"]}).to_list(length=100)
+    active_jobs = await db.jobs.find({
+        "status": {"$in": ["QUEUED", "RUNNING", "RETRYING"]}
+    }).to_list(length=1000)
+    now = datetime.utcnow()
+    cooldown_tracker = build_account_cooldown_tracker(accounts, active_jobs, now)
+
     retried_count = 0
     for job in failed_jobs:
         job_id = str(job["_id"])
+        scheduled_time, is_delayed = reserve_account_schedule(
+            cooldown_tracker, str(job["account_id"]), campaign["platform"], now
+        )
         await db.jobs.update_one(
             {"_id": job["_id"]},
             {"$set": {
-                "status": "QUEUED",
-                "scheduled_time": datetime.utcnow(),
+                "status": "RETRYING" if is_delayed else "QUEUED",
+                "scheduled_time": scheduled_time,
                 "started_at": None,
                 "completed_at": None,
                 "error_message": None
             }}
         )
         await db.target_urls.update_one({"_id": job["url_id"]}, {"$set": {"status": "PROCESSING", "error_message": None}})
-        await queue_service.enqueue_job(job_id)
+        if is_delayed:
+            await queue_service.schedule_job(job_id, scheduled_time.timestamp())
+        else:
+            await queue_service.enqueue_job(job_id)
         retried_count += 1
         
     await write_audit_log(

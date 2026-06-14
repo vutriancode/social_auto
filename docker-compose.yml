@@ -59,8 +59,6 @@ services:
     container_name: campaign_frontend
     ports:
       - "3099:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://127.0.0.1:8099
     depends_on:
       - backend-api
 

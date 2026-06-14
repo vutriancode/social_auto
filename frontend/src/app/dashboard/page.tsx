@@ -2,8 +2,116 @@
 
 import { useState, useEffect, useRef } from "react";
 import Pagination from "../../components/Pagination";
+import { getApiBase } from "../../lib/apiBase";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8099";
+const API_BASE = getApiBase();
+
+const STAT_CARD_DEFS = [
+  {
+    key: "total_campaigns",
+    label: "Tổng chiến dịch",
+    color: "from-blue-500 to-indigo-600",
+    textColor: "text-blue-600",
+    bgColor: "bg-blue-50/70 border-blue-100",
+    glowColor: "bg-blue-500/10",
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+      </svg>
+    )
+  },
+  {
+    key: "success_rate",
+    suffix: "%",
+    label: "Tỷ lệ thành công",
+    color: "from-emerald-500 to-teal-600",
+    textColor: "text-emerald-600",
+    bgColor: "bg-emerald-50/70 border-emerald-100",
+    glowColor: "bg-emerald-500/10",
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+      </svg>
+    )
+  },
+  {
+    key: "failed_jobs",
+    label: "Tác vụ thất bại",
+    color: "from-rose-500 to-red-600",
+    textColor: "text-rose-600",
+    bgColor: "bg-rose-50/70 border-rose-100",
+    glowColor: "bg-rose-500/10",
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+      </svg>
+    )
+  },
+  {
+    key: "active_accounts",
+    label: "Tài khoản chạy",
+    color: "from-violet-500 to-purple-600",
+    textColor: "text-violet-600",
+    bgColor: "bg-violet-50/70 border-violet-100",
+    glowColor: "bg-violet-500/10",
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+      </svg>
+    )
+  },
+  {
+    key: "queue_size",
+    label: "Hàng chờ Redis",
+    color: "from-amber-500 to-orange-600",
+    textColor: "text-amber-600",
+    bgColor: "bg-amber-50/70 border-amber-100",
+    glowColor: "bg-amber-500/10",
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+    )
+  },
+  {
+    key: "avg_processing_time",
+    suffix: "s",
+    label: "Thời gian chạy TB",
+    color: "from-sky-500 to-cyan-600",
+    textColor: "text-sky-600",
+    bgColor: "bg-sky-50/70 border-sky-100",
+    glowColor: "bg-sky-500/10",
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    )
+  }
+];
+
+const CAMPAIGN_STATUS_COLORS = {
+  RUNNING: "bg-gradient-to-r from-blue-500 to-indigo-500",
+  COMPLETED: "bg-gradient-to-r from-emerald-500 to-teal-500",
+  PAUSED: "bg-gradient-to-r from-amber-500 to-orange-500",
+  DRAFT: "bg-gradient-to-r from-slate-400 to-slate-500",
+  READY: "bg-gradient-to-r from-cyan-500 to-teal-500"
+};
+
+const CAMPAIGN_STATUS_LABELS = {
+  RUNNING: "Đang chạy",
+  COMPLETED: "Hoàn thành",
+  PAUSED: "Tạm dừng",
+  DRAFT: "Bản nháp",
+  READY: "Sẵn sàng"
+};
+
+const CAMPAIGN_STATUS_DOT_COLORS = {
+  RUNNING: "bg-blue-500",
+  COMPLETED: "bg-emerald-500",
+  PAUSED: "bg-amber-500",
+  DRAFT: "bg-slate-400",
+  READY: "bg-cyan-500"
+};
 
 export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(1);
@@ -70,86 +178,10 @@ export default function Dashboard() {
     );
   }
 
-  const statCards = [
-    {
-      label: "Tổng chiến dịch",
-      val: metrics.total_campaigns,
-      color: "from-blue-500 to-indigo-600",
-      textColor: "text-blue-600",
-      bgColor: "bg-blue-50/70 border-blue-100",
-      glowColor: "bg-blue-500/10",
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-        </svg>
-      )
-    },
-    {
-      label: "Tỷ lệ thành công",
-      val: `${metrics.success_rate}%`,
-      color: "from-emerald-500 to-teal-600",
-      textColor: "text-emerald-600",
-      bgColor: "bg-emerald-50/70 border-emerald-100",
-      glowColor: "bg-emerald-500/10",
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-        </svg>
-      )
-    },
-    {
-      label: "Tác vụ thất bại",
-      val: metrics.failed_jobs,
-      color: "from-rose-500 to-red-600",
-      textColor: "text-rose-600",
-      bgColor: "bg-rose-50/70 border-rose-100",
-      glowColor: "bg-rose-500/10",
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-      )
-    },
-    {
-      label: "Tài khoản chạy",
-      val: metrics.active_accounts,
-      color: "from-violet-500 to-purple-600",
-      textColor: "text-violet-600",
-      bgColor: "bg-violet-50/70 border-violet-100",
-      glowColor: "bg-violet-500/10",
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0z" />
-        </svg>
-      )
-    },
-    {
-      label: "Hàng chờ Redis",
-      val: metrics.queue_size,
-      color: "from-amber-500 to-orange-600",
-      textColor: "text-amber-600",
-      bgColor: "bg-amber-50/70 border-amber-100",
-      glowColor: "bg-amber-500/10",
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-      )
-    },
-    {
-      label: "Thời gian chạy TB",
-      val: `${metrics.avg_processing_time}s`,
-      color: "from-sky-500 to-cyan-600",
-      textColor: "text-sky-600",
-      bgColor: "bg-sky-50/70 border-sky-100",
-      glowColor: "bg-sky-500/10",
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      )
-    }
-  ];
+  const statCards = STAT_CARD_DEFS.map((def) => ({
+    ...def,
+    val: `${metrics[def.key]}${def.suffix || ""}`
+  }));
 
   // Filter logic
   const filteredJobs = metrics.recent_jobs.filter((job) => {
@@ -217,54 +249,32 @@ export default function Dashboard() {
             </h3>
           </div>
           <div className="space-y-4">
-            {Object.entries(metrics.campaign_distribution).map(([status, count]) => {
+            {(() => {
               const total = Object.values(metrics.campaign_distribution).reduce((a, b) => a + b, 0) || 1;
-              const pct = Math.round((count / total) * 100);
-              
-              const colors = {
-                RUNNING: "bg-gradient-to-r from-blue-500 to-indigo-500",
-                COMPLETED: "bg-gradient-to-r from-emerald-500 to-teal-500",
-                PAUSED: "bg-gradient-to-r from-amber-500 to-orange-500",
-                DRAFT: "bg-gradient-to-r from-slate-400 to-slate-500",
-                READY: "bg-gradient-to-r from-cyan-500 to-teal-500"
-              };
-              
-              const statusVn = {
-                RUNNING: "Đang chạy",
-                COMPLETED: "Hoàn thành",
-                PAUSED: "Tạm dừng",
-                DRAFT: "Bản nháp",
-                READY: "Sẵn sàng"
-              };
-              
-              const dotColors = {
-                RUNNING: "bg-blue-500",
-                COMPLETED: "bg-emerald-500",
-                PAUSED: "bg-amber-500",
-                DRAFT: "bg-slate-400",
-                READY: "bg-cyan-500"
-              };
+              return Object.entries(metrics.campaign_distribution).map(([status, count]) => {
+                const pct = Math.round((count / total) * 100);
 
-              return (
-                <div key={status} className="space-y-1.5">
-                  <div className="flex justify-between text-xs font-bold">
-                    <span className="text-slate-500 flex items-center">
-                      <span className={`h-1.5 w-1.5 rounded-full mr-2 ${dotColors[status] || "bg-blue-500"}`} />
-                      {statusVn[status] || status}
-                    </span>
-                    <span className="text-slate-800 bg-slate-50 px-2 py-0.5 rounded-md text-[10px]">
-                      {count} ({pct}%)
-                    </span>
+                return (
+                  <div key={status} className="space-y-1.5">
+                    <div className="flex justify-between text-xs font-bold">
+                      <span className="text-slate-500 flex items-center">
+                        <span className={`h-1.5 w-1.5 rounded-full mr-2 ${CAMPAIGN_STATUS_DOT_COLORS[status] || "bg-blue-500"}`} />
+                        {CAMPAIGN_STATUS_LABELS[status] || status}
+                      </span>
+                      <span className="text-slate-800 bg-slate-50 px-2 py-0.5 rounded-md text-[10px]">
+                        {count} ({pct}%)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${CAMPAIGN_STATUS_COLORS[status] || "bg-blue-500"} rounded-full transition-all duration-500`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${colors[status] || "bg-blue-500"} rounded-full transition-all duration-500`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+                );
+              });
+            })()}
           </div>
         </div>
 
