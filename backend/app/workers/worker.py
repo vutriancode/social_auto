@@ -8,13 +8,16 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
 from app.core.config import settings, ACCOUNT_COMMENT_COOLDOWN_SECONDS
-from app.core.time_utils import parse_to_naive_utc
+from app.core.time_utils import parse_to_naive_utc, compute_next_fixed_time
 from app.core.job_scheduling import build_account_cooldown_tracker, reserve_account_schedule
 from app.services.social_mock import (
     SocialAuthError,
     SocialCheckpointError,
     mock_post_comment,
     parse_cookie_to_dict,
+    post_comment_facebook,
+    publish_post_facebook,
+    extract_fb_post_id,
 )
 
 # Configure logging for worker
@@ -27,6 +30,8 @@ logger = logging.getLogger("worker")
 IMMEDIATE_QUEUE = "campaign_jobs_queue"
 REFRESH_QUEUE = "account_refresh_queue"
 SCHEDULED_QUEUE = "campaign_jobs_scheduled"
+
+
 
 
 def normalize_monitor_page_urls(campaign: dict) -> list[str]:
@@ -377,11 +382,14 @@ class Worker:
             "campaign_id": campaign_id,
             "status": {"$in": ["PENDING", "QUEUED", "RUNNING", "RETRYING"]}
         })
-        
+
         if remaining == 0:
             campaign = await self.db.campaigns.find_one({"_id": campaign_id})
             if campaign and campaign.get("campaign_type") == "MONITOR":
                 logger.info(f"All current jobs for monitored campaign {campaign_id} completed. Keeping campaign RUNNING for future scans.")
+                return
+            # Facebook publish campaigns run indefinitely until stopped manually
+            if campaign and campaign.get("platform") == "Facebook":
                 return
 
             logger.info(f"All jobs for campaign {campaign_id} completed. Finalizing campaign status...")
@@ -394,10 +402,14 @@ class Worker:
                 "status": next_status,
                 "end_time": datetime.utcnow()
             }
-            if campaign and campaign.get("repeat_enabled") and campaign.get("repeat_interval_minutes"):
-                update_fields["next_run_at"] = datetime.utcnow() + timedelta(
-                    minutes=campaign.get("repeat_interval_minutes", 60)
-                )
+            if campaign and campaign.get("repeat_enabled"):
+                schedule_mode = campaign.get("schedule_mode")
+                if schedule_mode == "fixed_times" and campaign.get("schedule_fixed_times"):
+                    update_fields["next_run_at"] = compute_next_fixed_time(campaign["schedule_fixed_times"])
+                elif campaign.get("repeat_interval_minutes"):
+                    update_fields["next_run_at"] = datetime.utcnow() + timedelta(
+                        minutes=campaign.get("repeat_interval_minutes", 60)
+                    )
 
             await self.db.campaigns.update_one(
                 {"_id": campaign_id, "status": "RUNNING"},
@@ -495,6 +507,8 @@ class Worker:
             has_official_token = bool(account.get("access_token") and account.get("threads_user_id"))
             has_cookie = bool(cookies.get("sessionid") or cookies.get("session_id"))
             missing = [] if has_official_token or has_cookie else ["official access_token + threads_user_id or sessionid/session_id"]
+        elif campaign["platform"] == "Facebook":
+            missing = [] if account.get("access_token") else ["page_access_token"]
         else:
             missing = [f"unsupported platform {campaign['platform']}"]
 
@@ -502,7 +516,7 @@ class Worker:
             await self.handle_retry(
                 job_id_str,
                 job,
-                f"Account @{account['username']} is missing required cookie keys: {', '.join(missing)}"
+                f"Account @{account['username']} is missing required credentials: {', '.join(missing)}"
             )
             await self.check_campaign_completion(campaign_id)
             return
@@ -511,17 +525,25 @@ class Worker:
             # Spin the comment text if it contains spintax (e.g. {Hello|Hi} world!)
             comment_text = spin_spintax(template_doc["content"])
 
-            # Execute real cookie-based API call
-            result = await mock_post_comment(
-                platform=campaign["platform"],
-                username=account["username"],
-                target_url=url_doc["url"],
-                comment_content=comment_text,
-                cookie=account.get("cookie"),
-                proxy=account.get("proxy"),
-                access_token=account.get("access_token"),
-                threads_user_id=account.get("threads_user_id"),
-            )
+            if campaign["platform"] == "Facebook":
+                post_id = extract_fb_post_id(url_doc["url"])
+                result = await post_comment_facebook(
+                    page_access_token=account["access_token"],
+                    post_id=post_id,
+                    comment_text=comment_text,
+                    proxy=account.get("proxy"),
+                )
+            else:
+                result = await mock_post_comment(
+                    platform=campaign["platform"],
+                    username=account["username"],
+                    target_url=url_doc["url"],
+                    comment_content=comment_text,
+                    cookie=account.get("cookie"),
+                    proxy=account.get("proxy"),
+                    access_token=account.get("access_token"),
+                    threads_user_id=account.get("threads_user_id"),
+                )
 
             latest_campaign = await db.campaigns.find_one({"_id": campaign_id})
             latest_job = await db.jobs.find_one({"_id": ObjectId(job_id_str)})
@@ -603,6 +625,8 @@ class Worker:
             cookies = parse_cookie_to_dict(account.get("cookie"))
             if platform == "X":
                 valid = bool(cookies.get("auth_token") and cookies.get("ct0"))
+            elif platform == "Facebook":
+                valid = bool(account.get("access_token"))
             else:
                 valid = bool(
                     account.get("access_token") and account.get("threads_user_id")
@@ -611,7 +635,7 @@ class Worker:
                 valid_accounts.append(account)
 
         if not valid_accounts:
-            logger.error(f"Cannot monitor campaign '{campaign['name']}': No active accounts with valid cookies.")
+            logger.error(f"Cannot monitor campaign '{campaign['name']}': No active accounts with valid credentials.")
             return
 
         active_campaign_jobs = await db.jobs.count_documents({
@@ -840,8 +864,12 @@ class Worker:
                 )
 
     async def postpone_recurring_campaign(self, campaign, reason: str):
-        interval_mins = campaign.get("repeat_interval_minutes") or 60
-        next_run_at = datetime.utcnow() + timedelta(minutes=interval_mins)
+        schedule_mode = campaign.get("schedule_mode")
+        if schedule_mode == "fixed_times" and campaign.get("schedule_fixed_times"):
+            next_run_at = compute_next_fixed_time(campaign["schedule_fixed_times"])
+        else:
+            interval_mins = campaign.get("repeat_interval_minutes") or 60
+            next_run_at = datetime.utcnow() + timedelta(minutes=interval_mins)
         await self.db.campaigns.update_one(
             {"_id": campaign["_id"]},
             {"$set": {
@@ -881,26 +909,37 @@ class Worker:
             await self.postpone_recurring_campaign(campaign, "No active comment templates configured")
             return
 
-        accounts = await db.accounts.find({
-            "platform": platform,
-            "status": "ACTIVE",
-            "owner_id": campaign["owner_id"],
-        }).sort("_id", 1).to_list(length=100)
-
-        valid_accounts = []
-        for account in accounts:
-            cookies = parse_cookie_to_dict(account.get("cookie"))
-            if platform == "X":
-                valid = bool(cookies.get("auth_token") and cookies.get("ct0"))
+        if platform == "Facebook":
+            fb_account_id = campaign.get("facebook_account_id")
+            if fb_account_id and ObjectId.is_valid(fb_account_id):
+                fb_acc = await db.accounts.find_one({"_id": ObjectId(fb_account_id), "status": "ACTIVE"})
+                valid_accounts = [fb_acc] if fb_acc and fb_acc.get("access_token") else []
             else:
-                valid = bool(
-                    account.get("access_token") and account.get("threads_user_id")
-                ) or bool(cookies.get("sessionid") or cookies.get("session_id"))
-            if valid:
-                valid_accounts.append(account)
+                all_fb = await db.accounts.find({
+                    "platform": "Facebook", "status": "ACTIVE", "owner_id": campaign["owner_id"]
+                }).to_list(length=10)
+                valid_accounts = [a for a in all_fb if a.get("access_token")]
+        else:
+            accounts = await db.accounts.find({
+                "platform": platform,
+                "status": "ACTIVE",
+                "owner_id": campaign["owner_id"],
+            }).sort("_id", 1).to_list(length=100)
+
+            valid_accounts = []
+            for account in accounts:
+                cookies = parse_cookie_to_dict(account.get("cookie"))
+                if platform == "X":
+                    valid = bool(cookies.get("auth_token") and cookies.get("ct0"))
+                else:
+                    valid = bool(
+                        account.get("access_token") and account.get("threads_user_id")
+                    ) or bool(cookies.get("sessionid") or cookies.get("session_id"))
+                if valid:
+                    valid_accounts.append(account)
 
         if not valid_accounts:
-            await self.postpone_recurring_campaign(campaign, "No active accounts with valid cookies")
+            await self.postpone_recurring_campaign(campaign, "No active accounts with valid credentials")
             return
 
         lock_result = await db.campaigns.update_one(
@@ -986,6 +1025,269 @@ class Worker:
             )
 
         logger.info(f"Recurring campaign '{campaign['name']}' started. Enqueued {jobs_enqueued} jobs.")
+
+    async def check_facebook_publish_campaigns(self):
+        """Tick: publish the next post for any RUNNING Facebook campaigns whose next_run_at has passed."""
+        db = self.db
+        now = datetime.utcnow()
+        cursor = db.campaigns.find({
+            "platform": "Facebook",
+            "status": "RUNNING",
+            "next_run_at": {"$lte": now},
+        })
+        async for campaign in cursor:
+            campaign_id = campaign["_id"]
+            try:
+                await self._do_facebook_publish(campaign)
+            except Exception as e:
+                logger.error(f"Error in Facebook publish tick for campaign {campaign_id}: {e}")
+
+    async def _do_facebook_publish(self, campaign: dict):
+        db = self.db
+        campaign_id = campaign["_id"]
+
+        # Get the Facebook account
+        fb_account_id = campaign.get("facebook_account_id")
+        if fb_account_id and ObjectId.is_valid(fb_account_id):
+            account = await db.accounts.find_one({"_id": ObjectId(fb_account_id), "status": "ACTIVE"})
+        else:
+            account = await db.accounts.find_one({
+                "platform": "Facebook", "status": "ACTIVE", "owner_id": campaign["owner_id"]
+            })
+
+        if not account or not account.get("access_token"):
+            logger.error(f"Facebook campaign '{campaign.get('name')}': no valid account/token. Stopping campaign.")
+            await db.campaigns.update_one(
+                {"_id": campaign_id, "status": "RUNNING"},
+                {"$set": {"status": "FAILED", "end_time": datetime.utcnow(),
+                          "error_message": "No active Facebook account with Page Access Token."}}
+            )
+            return
+
+        # Only pick templates that haven't been published yet
+        unpublished = await db.comment_templates.find({
+            "campaign_id": campaign_id, "status": "ACTIVE", "published_at": None
+        }).sort("created_at", 1).to_list(length=200)
+
+        if not unpublished:
+            # Check if there are any active templates at all
+            has_any = await db.comment_templates.count_documents({"campaign_id": campaign_id, "status": "ACTIVE"})
+            if has_any:
+                # All posts published → complete the campaign
+                logger.info(f"[Facebook] Campaign '{campaign.get('name')}': all posts published. Marking COMPLETED.")
+                await db.campaigns.update_one(
+                    {"_id": campaign_id, "status": "RUNNING"},
+                    {"$set": {"status": "COMPLETED", "end_time": datetime.utcnow(), "next_run_at": None}}
+                )
+            else:
+                logger.error(f"[Facebook] Campaign '{campaign.get('name')}': no active templates.")
+                await db.campaigns.update_one(
+                    {"_id": campaign_id, "status": "RUNNING"},
+                    {"$set": {"status": "FAILED", "end_time": datetime.utcnow(),
+                              "error_message": "No active post templates."}}
+                )
+            return
+
+        # Always publish the first unpublished template in order
+        template = unpublished[0]
+
+        # Structured template fields
+        message = spin_spintax(template["content"])
+        raw_image_url = template.get("image_url") or None
+        image_url = None
+        image_data = None
+        image_filename = "image.jpg"
+        if raw_image_url:
+            if raw_image_url.startswith("/api/media/"):
+                filename = raw_image_url.split("/api/media/", 1)[1]
+                local_path = f"/app/static/uploads/{filename}"
+                try:
+                    with open(local_path, "rb") as fh:
+                        image_data = fh.read()
+                    image_filename = filename
+                except OSError:
+                    image_url = raw_image_url  # fallback to URL if file missing
+            else:
+                image_url = raw_image_url
+        first_comment_raw = template.get("first_comment") or None
+        first_comment = spin_spintax(first_comment_raw) if first_comment_raw else None
+        comment_delay_minutes = int(template.get("comment_delay_minutes") or 0)
+
+        # Calculate next_run_at before publishing so we update it regardless of success/failure
+        schedule_mode = campaign.get("schedule_mode")
+        if schedule_mode == "fixed_times" and campaign.get("schedule_fixed_times"):
+            next_run_at = compute_next_fixed_time(campaign["schedule_fixed_times"])
+        else:
+            interval_mins = campaign.get("repeat_interval_minutes") or 60
+            next_run_at = datetime.utcnow() + timedelta(minutes=interval_mins)
+
+        now = datetime.utcnow()
+        job_doc = {
+            "campaign_id": campaign_id,
+            "account_id": account["_id"],
+            "url_id": None,
+            "template_id": template["_id"],
+            "status": "RUNNING",
+            "attempt_count": 1,
+            "scheduled_time": now,
+            "started_at": now,
+            "completed_at": None,
+            "error_message": None,
+            "created_at": now,
+            "job_type": "fb_publish",
+            "fb_image_url": image_url,
+            "fb_first_comment": first_comment,
+            "fb_comment_delay_minutes": comment_delay_minutes,
+        }
+        result = await db.jobs.insert_one(job_doc)
+        job_oid = result.inserted_id
+
+        try:
+            result_api = await publish_post_facebook(
+                page_access_token=account["access_token"],
+                message=message,
+                image_url=image_url,
+                image_data=image_data,
+                image_filename=image_filename,
+                proxy=account.get("proxy"),
+            )
+            post_id = result_api.get("post_id", "")
+
+            comment_status = None
+            comment_error = None
+            fb_comment_at = None
+
+            if first_comment and post_id:
+                if comment_delay_minutes > 0:
+                    # Schedule comment for later
+                    fb_comment_at = now + timedelta(minutes=comment_delay_minutes)
+                    comment_status = "PENDING"
+                    logger.info(f"[Facebook] Post {post_id} published. Comment scheduled at {fb_comment_at.isoformat()} UTC")
+                else:
+                    # Post comment immediately
+                    try:
+                        await post_comment_facebook(
+                            page_access_token=account["access_token"],
+                            post_id=post_id,
+                            comment_text=first_comment,
+                            proxy=account.get("proxy"),
+                        )
+                        comment_status = "SUCCESS"
+                        logger.info(f"[Facebook] Added first comment to post {post_id}")
+                    except Exception as ce:
+                        comment_status = "FAILED"
+                        comment_error = str(ce)
+                        logger.warning(f"[Facebook] Failed to add first comment to post {post_id}: {ce}")
+
+            await db.jobs.update_one(
+                {"_id": job_oid},
+                {"$set": {
+                    "status": "SUCCESS",
+                    "completed_at": datetime.utcnow(),
+                    "real_api": result_api.get("real_api", False),
+                    "commented_text": message,
+                    "fb_post_id": post_id,
+                    "fb_comment_status": comment_status,
+                    "fb_comment_error": comment_error,
+                    "fb_comment_at": fb_comment_at,
+                }}
+            )
+            logger.info(f"[Facebook] Published post for campaign '{campaign.get('name')}'. post_id={post_id}")
+        except SocialAuthError as e:
+            await db.jobs.update_one(
+                {"_id": job_oid},
+                {"$set": {"status": "FAILED", "completed_at": datetime.utcnow(), "error_message": str(e)}}
+            )
+            await db.accounts.update_one(
+                {"_id": account["_id"]},
+                {"$set": {"status": "ERROR", "error_message": str(e)}}
+            )
+            logger.error(f"[Facebook] Auth error for campaign '{campaign.get('name')}': {e}")
+        except Exception as e:
+            await db.jobs.update_one(
+                {"_id": job_oid},
+                {"$set": {"status": "FAILED", "completed_at": datetime.utcnow(), "error_message": str(e)}}
+            )
+            logger.error(f"[Facebook] Publish error for campaign '{campaign.get('name')}': {e}")
+
+        # Mark this template as published so it won't be re-published
+        await db.comment_templates.update_one(
+            {"_id": template["_id"]},
+            {"$set": {"published_at": now}}
+        )
+        # Schedule next publish slot (only if more unpublished templates remain)
+        remaining = await db.comment_templates.count_documents({
+            "campaign_id": campaign_id, "status": "ACTIVE", "published_at": None
+        })
+        if remaining > 0:
+            await db.campaigns.update_one(
+                {"_id": campaign_id, "status": "RUNNING"},
+                {"$set": {"next_run_at": next_run_at, "last_repeat_run_at": now}}
+            )
+        else:
+            # All posts published — complete campaign on next tick
+            await db.campaigns.update_one(
+                {"_id": campaign_id, "status": "RUNNING"},
+                {"$set": {"next_run_at": None, "last_repeat_run_at": now}}
+            )
+
+    async def check_pending_fb_comments(self):
+        """Post delayed first-comments on Facebook publish jobs whose fb_comment_at has passed."""
+        db = self.db
+        now = datetime.utcnow()
+        cursor = db.jobs.find({
+            "job_type": "fb_publish",
+            "fb_comment_status": "PENDING",
+            "fb_comment_at": {"$lte": now},
+        })
+        async for job in cursor:
+            try:
+                await self._do_delayed_fb_comment(job)
+            except Exception as e:
+                logger.error(f"Error posting delayed FB comment for job {job['_id']}: {e}")
+
+    async def _do_delayed_fb_comment(self, job: dict):
+        db = self.db
+        post_id = job.get("fb_post_id")
+        comment_text = job.get("fb_first_comment")
+        if not post_id or not comment_text:
+            await db.jobs.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"fb_comment_status": "FAILED", "fb_comment_error": "Missing post_id or comment text"}}
+            )
+            return
+
+        account = await db.accounts.find_one({"_id": job["account_id"]})
+        if not account or not account.get("access_token"):
+            await db.jobs.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"fb_comment_status": "FAILED", "fb_comment_error": "Account or token not found"}}
+            )
+            return
+
+        try:
+            await post_comment_facebook(
+                page_access_token=account["access_token"],
+                post_id=post_id,
+                comment_text=comment_text,
+                proxy=account.get("proxy"),
+            )
+            await db.jobs.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"fb_comment_status": "SUCCESS", "fb_comment_error": None}}
+            )
+            logger.info(f"[Facebook] Delayed comment posted on post {post_id}")
+        except SocialAuthError as e:
+            await db.jobs.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"fb_comment_status": "FAILED", "fb_comment_error": str(e)}}
+            )
+        except Exception as e:
+            await db.jobs.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"fb_comment_status": "FAILED", "fb_comment_error": str(e)}}
+            )
+            logger.warning(f"[Facebook] Delayed comment failed for post {post_id}: {e}")
 
     async def check_recurring_campaigns(self):
         now = datetime.utcnow()
@@ -1111,6 +1413,8 @@ class Worker:
                     self.last_monitor_check = now_ts
                     await self.check_monitored_campaigns()
                     await self.check_recurring_campaigns()
+                    await self.check_facebook_publish_campaigns()
+                    await self.check_pending_fb_comments()
 
                 await self.enqueue_due_scheduled_jobs()
                 # BLPOP block for 5 seconds waiting for next job ID or refresh task ID

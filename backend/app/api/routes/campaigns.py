@@ -7,12 +7,14 @@ from app.db.database import get_db
 from app.schemas import (
     CampaignCreate, CampaignUpdate, CampaignOut,
     TargetURLImport, TargetURLOut, TargetURLUpdate, CommentTemplateImport, CommentTemplateOut, CommentTemplateUpdate,
+    FacebookTemplateCreate,
     AssignAccountToURL,
     serialize_doc, serialize_docs
 )
 from app.api.routes.auth import get_current_user, write_audit_log
 from app.services.queue_service import queue_service
 from app.core.job_scheduling import build_account_cooldown_tracker, reserve_account_schedule
+from app.core.time_utils import compute_next_fixed_time
 
 router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 
@@ -61,6 +63,8 @@ def is_valid_target_post_url(url: str, platform: str) -> bool:
         return ("threads.net/" in lowered or "threads.com/" in lowered) and (
             "/post/" in lowered or "/t/" in lowered
         )
+    if platform == "Facebook":
+        return "facebook.com/" in lowered
     return False
 
 
@@ -89,9 +93,10 @@ async def refresh_campaign_readiness(campaign_id: ObjectId, current_status: str)
         return
 
     is_monitor = campaign.get("campaign_type") == "MONITOR"
+    is_facebook_publish = campaign.get("platform") == "Facebook"
 
     has_url = True
-    if not is_monitor:
+    if not is_monitor and not is_facebook_publish:
         has_url = await db.target_urls.count_documents({
             "campaign_id": campaign_id,
             "status": {"$in": ["PENDING", "PROCESSING", "SUCCESS", "FAILED"]},
@@ -132,8 +137,19 @@ async def create_campaign(
         "monitor_page_urls": monitor_page_urls,
         "monitor_interval": campaign_in.monitor_interval or 15,
         "last_monitored_at": None,
-        "repeat_enabled": bool(campaign_in.repeat_enabled),
-        "repeat_interval_minutes": campaign_in.repeat_interval_minutes,
+        "repeat_enabled": bool(campaign_in.repeat_enabled or campaign_in.schedule_mode),
+        "repeat_interval_minutes": (
+            campaign_in.schedule_interval_minutes
+            if campaign_in.schedule_mode == "interval" and campaign_in.schedule_interval_minutes
+            else (campaign_in.schedule_interval_hours * 60)
+            if campaign_in.schedule_mode == "interval" and campaign_in.schedule_interval_hours
+            else campaign_in.repeat_interval_minutes
+        ),
+        "schedule_mode": campaign_in.schedule_mode,
+        "schedule_interval_hours": campaign_in.schedule_interval_hours,
+        "schedule_interval_minutes": campaign_in.schedule_interval_minutes,
+        "schedule_fixed_times": campaign_in.schedule_fixed_times or [],
+        "facebook_account_id": campaign_in.facebook_account_id,
         "comment_template_cursor": 0,
         "next_run_at": None,
         "last_repeat_run_at": None,
@@ -235,7 +251,24 @@ async def update_campaign(
         update_data["repeat_interval_minutes"] = campaign_in.repeat_interval_minutes
         if campaign.get("repeat_enabled") or update_data.get("repeat_enabled"):
             update_data["next_run_at"] = datetime.utcnow() + timedelta(minutes=campaign_in.repeat_interval_minutes)
-        
+    # Use model_fields_set to distinguish "field sent as null" from "field not sent"
+    sent_fields = campaign_in.model_fields_set
+    if "schedule_mode" in sent_fields:
+        update_data["schedule_mode"] = campaign_in.schedule_mode
+        if campaign_in.schedule_mode is None:
+            update_data["next_run_at"] = None
+    if campaign_in.schedule_interval_hours is not None:
+        update_data["schedule_interval_hours"] = campaign_in.schedule_interval_hours
+    if campaign_in.schedule_interval_minutes is not None:
+        update_data["schedule_interval_minutes"] = campaign_in.schedule_interval_minutes
+        update_data["repeat_interval_minutes"] = campaign_in.schedule_interval_minutes
+    if campaign_in.schedule_fixed_times is not None:
+        update_data["schedule_fixed_times"] = campaign_in.schedule_fixed_times
+    if campaign_in.facebook_account_id is not None:
+        update_data["facebook_account_id"] = campaign_in.facebook_account_id
+    if "next_run_at" in sent_fields and "next_run_at" not in update_data:
+        update_data["next_run_at"] = campaign_in.next_run_at
+
     if not update_data:
         return serialize_doc(campaign)
         
@@ -660,6 +693,35 @@ async def import_templates(
     return inserted_templates
 
 
+@router.post("/{campaign_id}/templates/facebook", response_model=CommentTemplateOut, status_code=status.HTTP_201_CREATED)
+async def create_facebook_template(
+    campaign_id: str,
+    template_in: FacebookTemplateCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    db = get_db()
+    campaign = await get_campaign_for_user(campaign_id, current_user)
+    if not template_in.content.strip():
+        raise HTTPException(status_code=400, detail="Post content is required")
+
+    template_doc = {
+        "campaign_id": ObjectId(campaign_id),
+        "content": template_in.content.strip(),
+        "image_url": template_in.image_url.strip() if template_in.image_url else None,
+        "first_comment": template_in.first_comment.strip() if template_in.first_comment else None,
+        "comment_delay_minutes": template_in.comment_delay_minutes or 0,
+        "category": "General",
+        "language": "vi",
+        "priority": "MEDIUM",
+        "status": "ACTIVE",
+        "created_at": datetime.utcnow(),
+    }
+    result = await db.comment_templates.insert_one(template_doc)
+    template_doc["_id"] = result.inserted_id
+    await refresh_campaign_readiness(ObjectId(campaign_id), campaign["status"])
+    return serialize_doc(template_doc)
+
+
 @router.get("/{campaign_id}/templates", response_model=List[CommentTemplateOut])
 async def list_campaign_templates(
     campaign_id: str,
@@ -729,7 +791,13 @@ async def update_template(
         update_data["priority"] = template_update.priority
     if template_update.status is not None:
         update_data["status"] = template_update.status
-    
+    if template_update.image_url is not None:
+        update_data["image_url"] = template_update.image_url.strip() or None
+    if template_update.first_comment is not None:
+        update_data["first_comment"] = template_update.first_comment.strip() or None
+    if template_update.comment_delay_minutes is not None:
+        update_data["comment_delay_minutes"] = template_update.comment_delay_minutes
+
     if not update_data:
         return serialize_doc(template)
     
@@ -798,49 +866,73 @@ async def start_campaign(
         raise HTTPException(status_code=400, detail="Campaign is already RUNNING")
         
     # Check if there are active accounts for this platform
-    accounts_query = {
-        "platform": campaign["platform"],
-        "status": "ACTIVE",
-        "owner_id": campaign.get("owner_id", ObjectId(current_user["id"]))
-    }
-
-    accounts = await db.accounts.find(accounts_query).sort("_id", 1).to_list(length=100)
     from app.services.social_mock import parse_cookie_to_dict
 
-    valid_accounts = []
-    invalid_reasons = []
-    for account in accounts:
-        cookies = parse_cookie_to_dict(account.get("cookie"))
-        username = account.get("username", "unknown")
-        if campaign["platform"] == "X":
-            missing = []
-            if not cookies.get("auth_token"):
-                missing.append("auth_token")
-            if not cookies.get("ct0"):
-                missing.append("ct0")
-            if not missing:
-                valid_accounts.append(account)
-            else:
-                invalid_reasons.append(f"@{username} thiếu {', '.join(missing)}")
+    # For Facebook, use the specific Page account set on the campaign
+    if campaign["platform"] == "Facebook":
+        fb_account_id = campaign.get("facebook_account_id")
+        if fb_account_id and ObjectId.is_valid(fb_account_id):
+            fb_acc = await db.accounts.find_one({
+                "_id": ObjectId(fb_account_id),
+                "status": "ACTIVE",
+                "owner_id": campaign.get("owner_id", ObjectId(current_user["id"]))
+            })
+            if not fb_acc:
+                raise HTTPException(status_code=400, detail="Facebook Page tài khoản được chọn không tồn tại hoặc đang không hoạt động.")
+            if not fb_acc.get("access_token"):
+                raise HTTPException(status_code=400, detail=f"Facebook Page '{fb_acc.get('username')}' chưa có Page Access Token.")
+            accounts = [fb_acc]
         else:
-            # Threads
-            has_official_token = bool(account.get("access_token") and account.get("threads_user_id"))
-            has_cookie = bool(cookies.get("sessionid") or cookies.get("session_id"))
-            if has_official_token or has_cookie:
-                valid_accounts.append(account)
-            else:
-                invalid_reasons.append(f"@{username} thiếu access_token+threads_user_id hoặc sessionid/session_id")
+            all_fb = await db.accounts.find({
+                "platform": "Facebook",
+                "status": "ACTIVE",
+                "owner_id": campaign.get("owner_id", ObjectId(current_user["id"]))
+            }).sort("_id", 1).to_list(length=10)
+            accounts = [a for a in all_fb if a.get("access_token")]
+            if not accounts:
+                raise HTTPException(status_code=400, detail="Không tìm thấy Facebook Page nào hoạt động có Page Access Token. Vui lòng cấu hình tài khoản Facebook Page trước.")
+    else:
+        accounts_query = {
+            "platform": campaign["platform"],
+            "status": "ACTIVE",
+            "owner_id": campaign.get("owner_id", ObjectId(current_user["id"]))
+        }
+        accounts = await db.accounts.find(accounts_query).sort("_id", 1).to_list(length=100)
 
-    accounts = valid_accounts
-    if not accounts:
-        if invalid_reasons:
-            detail_msg = f"Không tìm thấy tài khoản {campaign['platform']} hoạt động nào có Cookie hợp lệ. Chi tiết lỗi từng tài khoản: {'; '.join(invalid_reasons)}"
-        else:
-            detail_msg = f"Không tìm thấy tài khoản {campaign['platform']} hoạt động nào được cấu hình."
-        raise HTTPException(
-            status_code=400,
-            detail=detail_msg
-        )
+        valid_accounts = []
+        invalid_reasons = []
+        for account in accounts:
+            cookies = parse_cookie_to_dict(account.get("cookie"))
+            username = account.get("username", "unknown")
+            if campaign["platform"] == "X":
+                missing = []
+                if not cookies.get("auth_token"):
+                    missing.append("auth_token")
+                if not cookies.get("ct0"):
+                    missing.append("ct0")
+                if not missing:
+                    valid_accounts.append(account)
+                else:
+                    invalid_reasons.append(f"@{username} thiếu {', '.join(missing)}")
+            else:
+                # Threads
+                has_official_token = bool(account.get("access_token") and account.get("threads_user_id"))
+                has_cookie = bool(cookies.get("sessionid") or cookies.get("session_id"))
+                if has_official_token or has_cookie:
+                    valid_accounts.append(account)
+                else:
+                    invalid_reasons.append(f"@{username} thiếu access_token+threads_user_id hoặc sessionid/session_id")
+
+        accounts = valid_accounts
+        if not accounts:
+            if invalid_reasons:
+                detail_msg = f"Không tìm thấy tài khoản {campaign['platform']} hoạt động nào có Cookie hợp lệ. Chi tiết lỗi từng tài khoản: {'; '.join(invalid_reasons)}"
+            else:
+                detail_msg = f"Không tìm thấy tài khoản {campaign['platform']} hoạt động nào được cấu hình."
+            raise HTTPException(
+                status_code=400,
+                detail=detail_msg
+            )
         
     campaign_oid = ObjectId(campaign_id)
 
@@ -849,8 +941,36 @@ async def start_campaign(
     if not templates:
         raise HTTPException(
             status_code=400,
-            detail="No comment templates found for this campaign. Please add templates first."
+            detail="Chưa có bài đăng nào. Vui lòng thêm nội dung bài đăng trước."
         )
+
+    # Facebook publish campaigns: just set RUNNING with next_run_at, no URL jobs
+    if campaign["platform"] == "Facebook":
+        schedule_mode = campaign.get("schedule_mode")
+        if schedule_mode == "fixed_times" and campaign.get("schedule_fixed_times"):
+            next_run_at = compute_next_fixed_time(campaign["schedule_fixed_times"])
+        else:
+            interval_mins = campaign.get("repeat_interval_minutes") or 60
+            next_run_at = datetime.utcnow() + timedelta(minutes=interval_mins)
+
+        lock_result = await db.campaigns.update_one(
+            {"_id": campaign_oid, **campaign_scope(current_user), "status": {"$ne": "RUNNING"}},
+            {"$set": {
+                "status": "RUNNING",
+                "start_time": datetime.utcnow(),
+                "end_time": None,
+                "next_run_at": next_run_at,
+                "comment_template_cursor": 0,
+            }},
+        )
+        if lock_result.modified_count != 1:
+            raise HTTPException(status_code=409, detail="Campaign state changed. Please refresh and try again.")
+        await write_audit_log(
+            current_user["id"], current_user["username"],
+            "START", "CAMPAIGN", campaign_id,
+            new_val=f"Facebook publish campaign started, first post at {next_run_at.isoformat()} UTC"
+        )
+        return {"message": "Campaign started successfully", "jobs_enqueued": 0}
 
     # If campaign was previously COMPLETED/FAILED/STOPPED, reset everything for a fresh run
     if campaign["status"] in ["COMPLETED", "FAILED", "STOPPED"]:
@@ -1117,6 +1237,11 @@ async def duplicate_campaign(
         "last_monitored_at": None,
         "repeat_enabled": campaign.get("repeat_enabled", False),
         "repeat_interval_minutes": campaign.get("repeat_interval_minutes"),
+        "schedule_mode": campaign.get("schedule_mode"),
+        "schedule_interval_hours": campaign.get("schedule_interval_hours"),
+        "schedule_interval_minutes": campaign.get("schedule_interval_minutes"),
+        "schedule_fixed_times": campaign.get("schedule_fixed_times", []),
+        "facebook_account_id": campaign.get("facebook_account_id"),
         "comment_template_cursor": 0,
         "next_run_at": None,
         "last_repeat_run_at": None,

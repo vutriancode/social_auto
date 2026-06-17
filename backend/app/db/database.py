@@ -35,6 +35,11 @@ async def connect_to_mongo():
         await db_instance.db.jobs.create_index([("campaign_id", 1), ("url_id", 1)])
         # Target URLs unique per campaign
         await db_instance.db.target_urls.create_index([("campaign_id", 1), ("url", 1)], unique=True)
+        # Facebook collections
+        await db_instance.db.fb_pages.create_index([("owner_id", 1), ("page_id", 1)], unique=True)
+        await db_instance.db.fb_scheduled_jobs.create_index([("owner_id", 1), ("status", 1)])
+        await db_instance.db.fb_scheduled_jobs.create_index("scheduled_time")
+        await db_instance.db.fb_post_history.create_index([("owner_id", 1), ("posted_at", -1)])
         logger.info("Successfully connected to MongoDB and verified indexes.")
     except Exception as e:
         logger.error(f"Error creating indexes: {e}")

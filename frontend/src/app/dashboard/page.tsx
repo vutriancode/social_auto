@@ -10,10 +10,8 @@ const STAT_CARD_DEFS = [
   {
     key: "total_campaigns",
     label: "Tổng chiến dịch",
-    color: "from-blue-500 to-indigo-600",
     textColor: "text-blue-600",
-    bgColor: "bg-blue-50/70 border-blue-100",
-    glowColor: "bg-blue-500/10",
+    bgColor: "bg-blue-50 border-blue-100",
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
@@ -24,10 +22,8 @@ const STAT_CARD_DEFS = [
     key: "success_rate",
     suffix: "%",
     label: "Tỷ lệ thành công",
-    color: "from-emerald-500 to-teal-600",
     textColor: "text-emerald-600",
-    bgColor: "bg-emerald-50/70 border-emerald-100",
-    glowColor: "bg-emerald-500/10",
+    bgColor: "bg-emerald-50 border-emerald-100",
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
@@ -37,10 +33,8 @@ const STAT_CARD_DEFS = [
   {
     key: "failed_jobs",
     label: "Tác vụ thất bại",
-    color: "from-rose-500 to-red-600",
     textColor: "text-rose-600",
-    bgColor: "bg-rose-50/70 border-rose-100",
-    glowColor: "bg-rose-500/10",
+    bgColor: "bg-rose-50 border-rose-100",
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -50,68 +44,15 @@ const STAT_CARD_DEFS = [
   {
     key: "active_accounts",
     label: "Tài khoản chạy",
-    color: "from-violet-500 to-purple-600",
     textColor: "text-violet-600",
-    bgColor: "bg-violet-50/70 border-violet-100",
-    glowColor: "bg-violet-500/10",
+    bgColor: "bg-violet-50 border-violet-100",
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
       </svg>
     )
   },
-  {
-    key: "queue_size",
-    label: "Hàng chờ Redis",
-    color: "from-amber-500 to-orange-600",
-    textColor: "text-amber-600",
-    bgColor: "bg-amber-50/70 border-amber-100",
-    glowColor: "bg-amber-500/10",
-    icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-      </svg>
-    )
-  },
-  {
-    key: "avg_processing_time",
-    suffix: "s",
-    label: "Thời gian chạy TB",
-    color: "from-sky-500 to-cyan-600",
-    textColor: "text-sky-600",
-    bgColor: "bg-sky-50/70 border-sky-100",
-    glowColor: "bg-sky-500/10",
-    icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    )
-  }
 ];
-
-const CAMPAIGN_STATUS_COLORS = {
-  RUNNING: "bg-gradient-to-r from-blue-500 to-indigo-500",
-  COMPLETED: "bg-gradient-to-r from-emerald-500 to-teal-500",
-  PAUSED: "bg-gradient-to-r from-amber-500 to-orange-500",
-  DRAFT: "bg-gradient-to-r from-slate-400 to-slate-500",
-  READY: "bg-gradient-to-r from-cyan-500 to-teal-500"
-};
-
-const CAMPAIGN_STATUS_LABELS = {
-  RUNNING: "Đang chạy",
-  COMPLETED: "Hoàn thành",
-  PAUSED: "Tạm dừng",
-  DRAFT: "Bản nháp",
-  READY: "Sẵn sàng"
-};
-
-const CAMPAIGN_STATUS_DOT_COLORS = {
-  RUNNING: "bg-blue-500",
-  COMPLETED: "bg-emerald-500",
-  PAUSED: "bg-amber-500",
-  DRAFT: "bg-slate-400",
-  READY: "bg-cyan-500"
-};
 
 export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(1);
@@ -122,10 +63,7 @@ export default function Dashboard() {
     success_rate: 0.0,
     failed_jobs: 0,
     active_accounts: 0,
-    queue_size: 0,
-    avg_processing_time: 0.0,
     recent_jobs: [],
-    campaign_distribution: { DRAFT: 0, READY: 0, RUNNING: 0, COMPLETED: 0 }
   });
   const [loading, setLoading] = useState(true);
   const [filterPlatform, setFilterPlatform] = useState("ALL");
@@ -184,11 +122,19 @@ export default function Dashboard() {
   }));
 
   // Filter logic
+  const getJobPlatform = (job) => {
+    if (job.platform) return job.platform;
+    const url = job.target_url || "";
+    if (url.includes("threads.net") || url.includes("threads.com")) return "Threads";
+    if (url.includes("facebook.com")) return "Facebook";
+    return "X";
+  };
+
   const filteredJobs = metrics.recent_jobs.filter((job) => {
+    const plat = getJobPlatform(job);
     const isPlatformMatch =
       filterPlatform === "ALL" ||
-      (filterPlatform === "THREADS" && (job.target_url?.includes("threads.net") || job.target_url?.includes("threads.com"))) ||
-      (filterPlatform === "X" && !(job.target_url?.includes("threads.net") || job.target_url?.includes("threads.com")));
+      filterPlatform === plat.toUpperCase();
 
     const isStatusMatch = filterStatus === "ALL" || job.status === filterStatus;
 
@@ -207,21 +153,18 @@ export default function Dashboard() {
   const paginatedJobs = filteredJobs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   return (
-    <div className="space-y-6 pb-8 animate-slide-up">
+    <div className="space-y-8 pb-8 animate-slide-up">
       {/* Stat Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {statCards.map((card, idx) => (
           <div
             key={idx}
-            className="group relative bg-white border border-slate-200/80 p-5 rounded-2xl transition-all duration-300 hover:shadow-lg hover:shadow-slate-100/50 hover:border-slate-300 hover:-translate-y-1 flex flex-col justify-between h-36 overflow-hidden"
+            className="bg-gray-50 border border-gray-200 rounded-lg shadow-none p-5 flex flex-col justify-between h-32"
           >
-            {/* Glow Blob decoration */}
-            <div className={`absolute -right-6 -bottom-6 w-20 h-20 rounded-full blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none ${card.glowColor}`} />
-
-            <div className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all duration-300 group-hover:scale-110 ${card.bgColor} ${card.textColor}`}>
+            <div className={`w-10 h-10 rounded-xl border flex items-center justify-center ${card.bgColor} ${card.textColor}`}>
               {card.icon}
             </div>
-            <div className="space-y-1 z-10">
+            <div className="space-y-1">
               <h3 className="text-2xl font-extrabold text-slate-900 tracking-tight leading-none">
                 {card.val}
               </h3>
@@ -233,120 +176,8 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Middle Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Campaign distribution list */}
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-6 space-y-5 shadow-sm shadow-slate-100/30">
-          <div className="flex items-center space-x-2.5 pb-2 border-b border-slate-100">
-            <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M11 3.055A9.003 9.003 0 1020.945 13H11V3.055z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
-              </svg>
-            </div>
-            <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-              Phân bố chiến dịch
-            </h3>
-          </div>
-          <div className="space-y-4">
-            {(() => {
-              const total = Object.values(metrics.campaign_distribution).reduce((a, b) => a + b, 0) || 1;
-              return Object.entries(metrics.campaign_distribution).map(([status, count]) => {
-                const pct = Math.round((count / total) * 100);
-
-                return (
-                  <div key={status} className="space-y-1.5">
-                    <div className="flex justify-between text-xs font-bold">
-                      <span className="text-slate-500 flex items-center">
-                        <span className={`h-1.5 w-1.5 rounded-full mr-2 ${CAMPAIGN_STATUS_DOT_COLORS[status] || "bg-blue-500"}`} />
-                        {CAMPAIGN_STATUS_LABELS[status] || status}
-                      </span>
-                      <span className="text-slate-800 bg-slate-50 px-2 py-0.5 rounded-md text-[10px]">
-                        {count} ({pct}%)
-                      </span>
-                    </div>
-                    <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full ${CAMPAIGN_STATUS_COLORS[status] || "bg-blue-500"} rounded-full transition-all duration-500`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-        </div>
-
-        {/* Worker and environment status card */}
-        <div className="lg:col-span-2 bg-white border border-slate-200/80 rounded-2xl p-6 flex flex-col justify-between shadow-sm shadow-slate-100/30">
-          <div className="space-y-5">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-7 h-7 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
-                </div>
-                <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                  Trạng thái Worker & Hàng chờ
-                </h3>
-              </div>
-              <div className="flex items-center space-x-1.5 bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-bold border border-emerald-100">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse-glow" />
-                <span>ỔN ĐỊNH</span>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-500 font-medium leading-relaxed">
-              Tiến trình worker chạy ngầm đang hoạt động trực tuyến. Tiến trình tự động giải phóng hàng chờ Redis, điều phối lịch trình bình luận và tự động xử lý hàng đợi lỗi tăng dần thời gian trễ.
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-slate-50/60 border border-slate-150 p-4 rounded-xl flex items-start space-x-3">
-                <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="text-[9px] font-extrabold uppercase text-slate-400 tracking-wider">Hàng chờ Redis</p>
-                  <p className="text-[11px] font-bold text-slate-800 mt-1 truncate">localhost:6399</p>
-                  <span className="text-[9px] text-emerald-600 font-extrabold uppercase mt-0.5 inline-block">Đã kết nối</span>
-                </div>
-              </div>
-
-              <div className="bg-slate-50/60 border border-slate-150 p-4 rounded-xl flex items-start space-x-3">
-                <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-600 flex items-center justify-center shrink-0">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 2 1.5 3 3.5 3h9c2 0 3.5-1 3.5-3V7c0-2-1.5-3-3.5-3h-9C5.5 4 4 5 4 7z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 12h16" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="text-[9px] font-extrabold uppercase text-slate-400 tracking-wider">MongoDB Database</p>
-                  <p className="text-[11px] font-bold text-slate-800 mt-1 truncate">social_campaign_db</p>
-                  <span className="text-[9px] text-emerald-600 font-extrabold uppercase mt-0.5 inline-block">Hoạt động</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center pt-4 border-t border-slate-100 mt-6 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-            <span className="flex items-center">
-              <span className="h-1 w-1 bg-slate-400 rounded-full mr-1.5" />
-              Lệnh chờ: <b className="text-slate-600 ml-1">BLPOP (5s)</b>
-            </span>
-            <span className="flex items-center">
-              <span className="h-1 w-1 bg-slate-400 rounded-full mr-1.5" />
-              Chu kỳ Quota: <b className="text-slate-600 ml-1">Tự động làm mới</b>
-            </span>
-          </div>
-        </div>
-      </div>
-
       {/* Live Monitor Table Panel */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-sm shadow-slate-100/30">
+      <div className="bg-gray-50 border border-gray-200 rounded-lg shadow-none p-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 pb-4 border-b border-slate-100">
           <div className="space-y-1">
             <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
@@ -356,7 +187,7 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center space-x-2">
-            <span className="h-2 w-2 rounded-full bg-blue-500 animate-ping" />
+            <span className="h-2 w-2 rounded-full bg-blue-500" />
             <span className="text-[10px] bg-blue-50 text-blue-700 px-3 py-1 rounded-md font-bold uppercase tracking-wider">
               Cập nhật liên tục
             </span>
@@ -383,7 +214,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-2 shrink-0">
             {/* Platform filter buttons */}
             <div className="bg-slate-100 p-0.5 rounded-xl flex">
-              {["ALL", "X", "THREADS"].map((plat) => (
+              {["ALL", "X", "THREADS", "FACEBOOK"].map((plat) => (
                 <button
                   key={plat}
                   onClick={() => setFilterPlatform(plat)}
@@ -393,7 +224,7 @@ export default function Dashboard() {
                       : "text-slate-500 hover:text-slate-900"
                   }`}
                 >
-                  {plat === "ALL" ? "Tất cả" : plat}
+                  {plat === "ALL" ? "Tất cả" : plat === "FACEBOOK" ? "Facebook" : plat}
                 </button>
               ))}
             </div>
@@ -435,31 +266,22 @@ export default function Dashboard() {
                 </tr>
               ) : (
                 paginatedJobs.map((job) => {
-                  const isThreads = job.target_url?.includes("threads.net") || job.target_url?.includes("threads.com");
+                  const plat = getJobPlatform(job);
+                  const platformBadge =
+                    plat === "Threads"
+                      ? { cls: "bg-purple-50 text-purple-700 border-purple-100", dot: "bg-purple-500", label: "Threads" }
+                      : plat === "Facebook"
+                      ? { cls: "bg-blue-50 text-blue-700 border-blue-100", dot: "bg-blue-500", label: "Facebook" }
+                      : { cls: "bg-slate-900 text-white border-slate-900", dot: "bg-white", label: "X (Twitter)" };
                   return (
                     <tr key={job.id} className="hover:bg-slate-50/50 transition-colors duration-150">
                       <td className="py-3.5 px-4 font-mono text-[10px] text-slate-400">
                         {job.id.substring(job.id.length - 8)}
                       </td>
                       <td className="py-3.5 px-4">
-                        <span
-                           className={`inline-flex items-center px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase border ${
-                            isThreads
-                              ? "bg-purple-50 text-purple-700 border-purple-100"
-                              : "bg-slate-900 text-white border-slate-900"
-                          }`}
-                        >
-                          {isThreads ? (
-                            <>
-                              <span className="w-1 h-1 bg-purple-500 rounded-full mr-1" />
-                              Threads
-                            </>
-                          ) : (
-                            <>
-                              <span className="w-1 h-1 bg-white rounded-full mr-1" />
-                              X (Twitter)
-                            </>
-                          )}
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase border ${platformBadge.cls}`}>
+                          <span className={`w-1 h-1 ${platformBadge.dot} rounded-full mr-1`} />
+                          {platformBadge.label}
                         </span>
                       </td>
                       <td className="py-3.5 px-4 font-bold text-slate-900">

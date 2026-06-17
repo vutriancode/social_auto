@@ -14,6 +14,38 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/accounts", tags=["Social Accounts"])
 
 
+@router.post("/facebook/resolve-token")
+async def resolve_facebook_token(
+    body: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Call Facebook Graph API to fetch Page name, avatar, and page_id from an access token."""
+    import httpx
+    token = (body.get("token") or "").strip()
+    proxy = (body.get("proxy") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+    GRAPH = "https://graph.facebook.com/v19.0"
+    proxies = {"all://": proxy} if proxy else None
+    try:
+        async with httpx.AsyncClient(proxies=proxies, timeout=15.0) as client:
+            r = await client.get(
+                f"{GRAPH}/me",
+                params={"fields": "name,picture.type(large),id", "access_token": token}
+            )
+        data = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Không kết nối được Facebook API: {e}")
+    if "error" in data:
+        err = data["error"]
+        raise HTTPException(status_code=400, detail=err.get("message", "Facebook API error"))
+    return {
+        "name": data.get("name", ""),
+        "avatar_url": (data.get("picture") or {}).get("data", {}).get("url", ""),
+        "page_id": data.get("id", ""),
+    }
+
+
 async def check_and_reset_limits(account: dict) -> dict:
     """Reset hourly/daily usage counters if the time window has passed.
     Updates the database and returns the updated account dict."""
@@ -94,6 +126,7 @@ async def create_account(
         "platform": account_in.platform,
         "username": account_in.username,
         "display_name": account_in.display_name or account_in.username,
+        "avatar_url": account_in.avatar_url or None,
         "cookie": account_in.cookie,
         "access_token": account_in.access_token,
         "threads_user_id": account_in.threads_user_id,

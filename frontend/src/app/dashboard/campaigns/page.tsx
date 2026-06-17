@@ -75,6 +75,11 @@ const extractUrlsFromText = (value, platform) => {
     source = raw;
   }
 
+  if (platform === "Facebook") {
+    const fbMatches = source.match(/https?:\/\/(?:www\.)?facebook\.com\/[^\s"'<>]+/gi) || [];
+    return uniqueList(fbMatches.map((u) => u.replace(/[),.;\]]+$/, "")));
+  }
+
   // Support matching both threads.net and threads.com domains
   const urlMatches = source.match(/(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com|threads\.net|threads\.com)\/[^\s"'<>]+/gi) || [];
   const normalized = urlMatches
@@ -136,9 +141,20 @@ export default function Campaigns() {
   const [newMonitorInterval, setNewMonitorInterval] = useState(15);
   const [newRepeatEnabled, setNewRepeatEnabled] = useState(false);
   const [newRepeatInterval, setNewRepeatInterval] = useState(60);
+  const [fbScheduleMode, setFbScheduleMode] = useState("");
+  const [fbIntervalMinutes, setFbIntervalMinutes] = useState(30);
+  const [fbFixedTimes, setFbFixedTimes] = useState("08:00,12:00,18:00");
+  const [fbAccountId, setFbAccountId] = useState("");
+  const [fbAccounts, setFbAccounts] = useState([]);
+  const [fbAccountName, setFbAccountName] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [bulkUrls, setBulkUrls] = useState("");
   const [bulkTemplates, setBulkTemplates] = useState("");
+
+  // Facebook structured template form
+  const emptyFbPost = { content: "", image_url: "", first_comment: "", comment_delay_minutes: 0 };
+  const [newFbPost, setNewFbPost] = useState(emptyFbPost);
+  const [showAddFbPost, setShowAddFbPost] = useState(false);
 
   const [toasts, setToasts] = useState([]);
   const selectedCampaignIdRef = useRef(null);
@@ -226,6 +242,19 @@ export default function Campaigns() {
       const accs = await apiFetch(`/api/accounts?platform=${updated.platform}`);
       if (selectedCampaignIdRef.current !== campaign.id) return;
       setPlatformAccounts(accs);
+
+      // Resolve Facebook Page name for display
+      if (updated.platform === "Facebook" && updated.facebook_account_id) {
+        try {
+          const fbAcc = await apiFetch(`/api/accounts/${updated.facebook_account_id}`);
+          if (selectedCampaignIdRef.current !== campaign.id) return;
+          setFbAccountName(fbAcc.display_name || fbAcc.username || "");
+        } catch {
+          setFbAccountName("");
+        }
+      } else {
+        setFbAccountName("");
+      }
     } catch (err) {
       console.warn(err);
     }
@@ -262,25 +291,49 @@ export default function Campaigns() {
     };
   }, [selectedCampaign?.id]);
 
+  useEffect(() => {
+    if (newCampaignPlatform === "Facebook") {
+      apiFetch("/api/accounts?platform=Facebook").then((data) => {
+        setFbAccounts(Array.isArray(data) ? data : data.items || []);
+      }).catch(() => setFbAccounts([]));
+    }
+  }, [newCampaignPlatform]);
+
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
+      if (newCampaignName.trim().length < 3) {
+        showToast("Tên chiến dịch phải có ít nhất 3 ký tự.", "error");
+        return;
+      }
       if (newCampaignType === "MONITOR" && parsedNewMonitorPageUrls.length === 0) {
         showToast("Vui lòng nhập ít nhất một link profile/page hợp lệ để giám sát.", "error");
         return;
       }
+      if (newCampaignPlatform === "Facebook" && !fbAccountId) {
+        showToast("Vui lòng chọn Facebook Page để đăng bài.", "error");
+        return;
+      }
+
+      const isFb = newCampaignPlatform === "Facebook";
+      const fbFixedTimesList = fbFixedTimes.split(/[,;\s]+/).map(t => t.trim()).filter(t => /^\d{2}:\d{2}$/.test(t));
+
       const res = await apiFetch("/api/campaigns", {
         method: "POST",
         body: JSON.stringify({
           name: newCampaignName,
           platform: newCampaignPlatform,
           description: newCampaignDesc,
-          campaign_type: newCampaignType,
+          campaign_type: isFb ? "STATIC" : newCampaignType,
           monitor_page_url: newCampaignType === "MONITOR" ? parsedNewMonitorPageUrls[0] : null,
           monitor_page_urls: newCampaignType === "MONITOR" ? parsedNewMonitorPageUrls : [],
           monitor_interval: newCampaignType === "MONITOR" ? newMonitorInterval : null,
-          repeat_enabled: newCampaignType === "STATIC" ? newRepeatEnabled : false,
-          repeat_interval_minutes: newCampaignType === "STATIC" && newRepeatEnabled ? newRepeatInterval : null,
+          repeat_enabled: isFb ? !!fbScheduleMode : (newCampaignType === "STATIC" ? newRepeatEnabled : false),
+          repeat_interval_minutes: isFb ? null : (newCampaignType === "STATIC" && newRepeatEnabled ? newRepeatInterval : null),
+          schedule_mode: isFb && fbScheduleMode ? fbScheduleMode : null,
+          schedule_interval_minutes: isFb && fbScheduleMode === "interval" ? fbIntervalMinutes : null,
+          schedule_fixed_times: isFb && fbScheduleMode === "fixed_times" ? fbFixedTimesList : null,
+          facebook_account_id: isFb ? fbAccountId : null,
         })
       });
       showToast("Tạo chiến dịch thành công!");
@@ -291,6 +344,10 @@ export default function Campaigns() {
       setNewMonitorInterval(15);
       setNewRepeatEnabled(false);
       setNewRepeatInterval(60);
+      setFbScheduleMode("");
+      setFbIntervalMinutes(30);
+      setFbFixedTimes("08:00,12:00,18:00");
+      setFbAccountId("");
       setShowCreateModal(false);
       loadCampaigns();
       setSelectedCampaign(res);
@@ -340,16 +397,18 @@ export default function Campaigns() {
   };
 
   const startCampaign = async (cid) => {
-    if (selectedCampaign?.campaign_type !== "MONITOR" && campaignUrls.length === 0) {
-      showToast("Vui lòng nhập ít nhất một link bài viết trước khi chạy chiến dịch.", "error");
-      return;
-    }
-    if (selectedCampaign?.campaign_type === "MONITOR" && selectedMonitorPageUrls.length === 0) {
-      showToast("Vui lòng nhập ít nhất một link profile/page cần giám sát trước khi chạy chiến dịch.", "error");
-      return;
+    if (selectedCampaign?.platform !== "Facebook") {
+      if (selectedCampaign?.campaign_type !== "MONITOR" && campaignUrls.length === 0) {
+        showToast("Vui lòng nhập ít nhất một link bài viết trước khi chạy chiến dịch.", "error");
+        return;
+      }
+      if (selectedCampaign?.campaign_type === "MONITOR" && selectedMonitorPageUrls.length === 0) {
+        showToast("Vui lòng nhập ít nhất một link profile/page cần giám sát trước khi chạy chiến dịch.", "error");
+        return;
+      }
     }
     if (campaignTemplates.length === 0) {
-      showToast("Vui lòng nhập ít nhất một nội dung comment trước khi chạy chiến dịch.", "error");
+      showToast("Vui lòng nhập ít nhất một nội dung bài đăng trước khi chạy chiến dịch.", "error");
       return;
     }
     try {
@@ -487,6 +546,74 @@ export default function Campaigns() {
 
   const completedUrlCount = campaignUrls.filter((url) => getStatusForUrl(url) === "SUCCESS").length;
 
+  const uploadImage = async (file: File): Promise<string | null> => {
+    const form = new FormData();
+    form.append("file", file);
+    const token = sessionStorage.getItem("campaign_token");
+    try {
+      const res = await fetch(`${API_BASE}/api/media/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Upload thất bại");
+      }
+      const data = await res.json();
+      return data.url as string;
+    } catch (err: any) {
+      showToast(err.message, "error");
+      return null;
+    }
+  };
+
+  const addFbTemplate = async () => {
+    if (!newFbPost.content.trim()) {
+      showToast("Vui lòng nhập nội dung bài đăng.", "error");
+      return;
+    }
+    try {
+      await apiFetch(`/api/campaigns/${selectedCampaign.id}/templates/facebook`, {
+        method: "POST",
+        body: JSON.stringify({
+          content: newFbPost.content.trim(),
+          image_url: newFbPost.image_url.trim() || null,
+          first_comment: newFbPost.first_comment.trim() || null,
+          comment_delay_minutes: Number(newFbPost.comment_delay_minutes) || 0,
+        })
+      });
+      setNewFbPost(emptyFbPost);
+      setShowAddFbPost(false);
+      showToast("Đã thêm bài đăng!");
+      loadDetails(selectedCampaign);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    }
+  };
+
+  const updateFbTemplate = async (templateId: string, patch: object) => {
+    try {
+      await apiFetch(`/api/campaigns/${selectedCampaign.id}/templates/${templateId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch)
+      });
+      loadDetails(selectedCampaign);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    }
+  };
+
+  const deleteFbTemplate = async (templateId: string) => {
+    try {
+      await apiFetch(`/api/campaigns/${selectedCampaign.id}/templates/${templateId}`, { method: "DELETE" });
+      showToast("Đã xóa bài đăng.");
+      loadDetails(selectedCampaign);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    }
+  };
+
   const updateRepeatSchedule = async (payload) => {
     try {
       await apiFetch(`/api/campaigns/${selectedCampaign.id}`, {
@@ -502,7 +629,7 @@ export default function Campaigns() {
   };
 
   return (
-    <div className="h-full grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-4 items-start pb-8 animate-slide-in">
+    <div className="h-full grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-6 items-start pb-8 animate-slide-in">
       
       {/* Toast notifications handler */}
       <div className="fixed top-6 right-6 z-50 space-y-3">
@@ -589,7 +716,7 @@ export default function Campaigns() {
       {/* Right Col: Details View */}
       <div className="min-w-0">
         {selectedCampaign ? (
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 space-y-6 shadow-none">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-7 space-y-7 shadow-none">
             
             {/* Title & Toolbar */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-gray-200 pb-5 gap-4">
@@ -597,8 +724,10 @@ export default function Campaigns() {
                 <div className="flex items-center space-x-2.5">
                   <h2 className="text-base font-extrabold text-gray-900 tracking-tight leading-none uppercase">{selectedCampaign.name}</h2>
                   <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded ${
-                    selectedCampaign.platform === "X" 
-                      ? "bg-blue-50 text-blue-700 border border-blue-200" 
+                    selectedCampaign.platform === "X"
+                      ? "bg-blue-50 text-blue-700 border border-blue-200"
+                      : selectedCampaign.platform === "Facebook"
+                      ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
                       : "bg-purple-50 text-purple-700 border border-purple-200"
                   }`}>
                     {selectedCampaign.platform}
@@ -651,14 +780,44 @@ export default function Campaigns() {
 
             {/* Campaign Metrics */}
             <div className="grid grid-cols-3 gap-4">
-              <div className="bg-white border border-gray-200 p-4 rounded-md text-center shadow-none">
-                <p className="text-[10px] font-extrabold uppercase text-gray-400 tracking-widest">Đường dẫn bài viết</p>
-                <p className="text-xl font-extrabold text-gray-900 mt-1">{campaignUrls.length}</p>
-              </div>
-              <div className="bg-white border border-gray-200 p-4 rounded-md text-center shadow-none">
-                <p className="text-[10px] font-extrabold uppercase text-gray-400 tracking-widest">Mẫu bình luận loaded</p>
-                <p className="text-xl font-extrabold text-gray-900 mt-1">{campaignTemplates.length}</p>
-              </div>
+              {selectedCampaign.platform === "Facebook" ? (() => {
+                const publishedCount = campaignTemplates.filter(t => t.published_at).length;
+                const totalCount = campaignTemplates.length;
+                const pct = totalCount > 0 ? Math.round((publishedCount / totalCount) * 100) : 0;
+                return (
+                  <>
+                    <div className="bg-white border border-gray-200 p-4 rounded-md shadow-none">
+                      <p className="text-[10px] font-extrabold uppercase text-gray-400 tracking-widest">Tiến độ đăng bài</p>
+                      <p className="text-xl font-extrabold text-gray-900 mt-1">{publishedCount}<span className="text-sm text-gray-400 font-bold">/{totalCount}</span></p>
+                      {totalCount > 0 && (
+                        <div className="mt-2 h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        </div>
+                      )}
+                      <p className="text-[9px] text-gray-400 font-bold mt-1">{totalCount - publishedCount} bài chờ đăng</p>
+                    </div>
+                    <div className="bg-white border border-gray-200 p-4 rounded-md shadow-none">
+                      <p className="text-[10px] font-extrabold uppercase text-gray-400 tracking-widest">Lần chạy kế tiếp</p>
+                      {selectedCampaign.next_run_at ? (
+                        <p className="text-xs font-extrabold text-indigo-600 mt-2 leading-snug">{formatVietnamDateTime(selectedCampaign.next_run_at)}</p>
+                      ) : (
+                        <p className="text-sm font-extrabold text-gray-300 mt-2.5">—</p>
+                      )}
+                    </div>
+                  </>
+                );
+              })() : (
+                <>
+                  <div className="bg-white border border-gray-200 p-4 rounded-md text-center shadow-none">
+                    <p className="text-[10px] font-extrabold uppercase text-gray-400 tracking-widest">Đường dẫn bài viết</p>
+                    <p className="text-xl font-extrabold text-gray-900 mt-1">{campaignUrls.length}</p>
+                  </div>
+                  <div className="bg-white border border-gray-200 p-4 rounded-md text-center shadow-none">
+                    <p className="text-[10px] font-extrabold uppercase text-gray-400 tracking-widest">Mẫu bình luận loaded</p>
+                    <p className="text-xl font-extrabold text-gray-900 mt-1">{campaignTemplates.length}</p>
+                  </div>
+                </>
+              )}
               <div className="bg-white border border-gray-200 p-4 rounded-md text-center shadow-none">
                 <p className="text-[10px] font-extrabold uppercase text-gray-400 tracking-widest">Trạng thái chạy</p>
                 <p className="text-sm font-extrabold text-[#3B82F6] mt-2.5 uppercase tracking-wider">
@@ -670,9 +829,12 @@ export default function Campaigns() {
             {/* Campaign Configuration Panel */}
             {(["DRAFT", "READY", "PAUSED"].includes(selectedCampaign.status) || selectedCampaign.campaign_type === "MONITOR") ? (
               <div className="bg-white border border-gray-200 p-5 rounded-md text-xs font-bold text-gray-600 space-y-4 shadow-none">
-                <h4 className="text-xs font-extrabold uppercase tracking-widest text-gray-500 border-b pb-2">Cấu hình giám sát & Thông tin</h4>
-                
+                <h4 className="text-xs font-extrabold uppercase tracking-widest text-gray-500 border-b pb-2">
+                  {selectedCampaign.platform === "Facebook" ? "Cấu hình lịch đăng bài" : "Cấu hình giám sát & Thông tin"}
+                </h4>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {selectedCampaign.platform !== "Facebook" && (
                   <div>
                     <label className="block mb-1.5 ml-0.5 text-gray-500">Loại chiến dịch</label>
                     {["DRAFT", "READY", "PAUSED"].includes(selectedCampaign.status) ? (
@@ -703,6 +865,7 @@ export default function Campaigns() {
                       </div>
                     )}
                   </div>
+                  )}
 
                   {selectedCampaign.campaign_type === "MONITOR" && (
                     <div>
@@ -734,7 +897,7 @@ export default function Campaigns() {
                     </div>
                   )}
 
-                  {selectedCampaign.campaign_type !== "MONITOR" && (
+                  {selectedCampaign.campaign_type !== "MONITOR" && selectedCampaign.platform !== "Facebook" && (
                     <div>
                       <label className="block mb-1.5 ml-0.5 text-gray-500">Lịch chạy lặp lại</label>
                       <select
@@ -762,6 +925,86 @@ export default function Campaigns() {
                       {selectedCampaign.repeat_enabled && (
                         <p className="mt-1.5 text-[10px] font-bold text-gray-400">
                           Lần chạy kế tiếp: {selectedCampaign.next_run_at ? formatVietnamDateTime(selectedCampaign.next_run_at) : "sau khi vòng hiện tại hoàn tất"}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedCampaign.platform === "Facebook" && (
+                    <div className="col-span-2 rounded-md border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+                      <p className="text-[10px] font-extrabold uppercase text-indigo-600 tracking-wide">Cấu hình Facebook Page</p>
+                      {fbAccountName && (
+                        <p className="text-xs font-bold text-gray-700">
+                          Facebook Page: <span className="text-indigo-700">{fbAccountName}</span>
+                        </p>
+                      )}
+                      <div>
+                        <label className="block mb-1.5 text-xs font-bold text-gray-700">Lịch đăng bài</label>
+                        <select
+                          value={selectedCampaign.schedule_mode || ""}
+                          onChange={async (e) => {
+                            const mode = e.target.value;
+                            const payload: any = { schedule_mode: mode || null, repeat_enabled: !!mode };
+                            if (mode === "interval") {
+                              const mins = selectedCampaign.repeat_interval_minutes || 30;
+                              payload.schedule_interval_minutes = mins;
+                              payload.repeat_interval_minutes = mins;
+                            }
+                            if (!mode) { payload.next_run_at = null; }
+                            await updateRepeatSchedule(payload);
+                          }}
+                          className="w-full h-10 bg-white border border-gray-200 rounded px-3 text-xs font-bold text-gray-900 focus:outline-none cursor-pointer"
+                        >
+                          <option value="">Chạy một lần (không lặp lại)</option>
+                          <option value="interval">Lặp theo khoảng thời gian (phút)</option>
+                          <option value="fixed_times">Lặp theo giờ cố định trong ngày</option>
+                        </select>
+                      </div>
+                      {selectedCampaign.schedule_mode === "interval" && (
+                        <div>
+                          <label className="block mb-1.5 text-xs font-bold text-gray-700">Khoảng cách giữa các lần (phút)</label>
+                          <select
+                            value={selectedCampaign.repeat_interval_minutes || 30}
+                            onChange={async (e) => {
+                              const mins = Number(e.target.value);
+                              await updateRepeatSchedule({ schedule_interval_minutes: mins, repeat_interval_minutes: mins });
+                            }}
+                            className="w-full h-10 bg-white border border-gray-200 rounded px-3 text-xs font-bold text-gray-900 focus:outline-none cursor-pointer"
+                          >
+                            <option value={5}>Mỗi 5 phút</option>
+                            <option value={10}>Mỗi 10 phút</option>
+                            <option value={15}>Mỗi 15 phút</option>
+                            <option value={30}>Mỗi 30 phút</option>
+                            <option value={60}>Mỗi 1 giờ</option>
+                            <option value={120}>Mỗi 2 giờ</option>
+                            <option value={240}>Mỗi 4 giờ</option>
+                            <option value={480}>Mỗi 8 giờ</option>
+                            <option value={720}>Mỗi 12 giờ</option>
+                            <option value={1440}>Mỗi 24 giờ</option>
+                          </select>
+                        </div>
+                      )}
+                      {selectedCampaign.schedule_mode === "fixed_times" && (
+                        <div>
+                          <label className="block mb-1.5 text-xs font-bold text-gray-700">Giờ cố định trong ngày (HH:MM)</label>
+                          <input
+                            type="text"
+                            key={selectedCampaign.id}
+                            defaultValue={(selectedCampaign.schedule_fixed_times || []).join(", ")}
+                            placeholder="Ví dụ: 08:00, 12:00, 18:00"
+                            onBlur={async (e) => {
+                              const times = e.target.value.split(/[,;\s]+/).map(t => t.trim()).filter(t => /^\d{2}:\d{2}$/.test(t));
+                              if (times.length === 0) return;
+                              await updateRepeatSchedule({ schedule_fixed_times: times });
+                            }}
+                            className="w-full h-10 bg-white border border-gray-200 rounded px-3 text-xs font-semibold text-gray-900 focus:outline-none"
+                          />
+                          <span className="text-[10px] text-gray-400 font-medium mt-1 block">Giờ theo múi giờ Việt Nam (GMT+7). Cách nhau bằng dấu phẩy.</span>
+                        </div>
+                      )}
+                      {selectedCampaign.next_run_at && (
+                        <p className="text-[10px] font-bold text-indigo-500">
+                          Lần chạy kế tiếp: {formatVietnamDateTime(selectedCampaign.next_run_at)}
                         </p>
                       )}
                     </div>
@@ -829,6 +1072,82 @@ export default function Campaigns() {
               !["DRAFT", "READY", "PAUSED"].includes(selectedCampaign.status) && (
                 <div className="bg-white border border-gray-200 p-5 rounded-md text-xs font-bold text-gray-600 space-y-3 shadow-none">
                   <h4 className="text-xs font-extrabold uppercase tracking-widest text-gray-500 border-b pb-2">Lịch chạy lặp lại</h4>
+                  {selectedCampaign.platform === "Facebook" ? (
+                    <div className="space-y-3">
+                      {fbAccountName && (
+                        <p className="text-xs font-bold text-gray-700">Facebook Page: <span className="text-indigo-700">{fbAccountName}</span></p>
+                      )}
+                      <div>
+                        <label className="block mb-1.5 text-[10px] font-extrabold text-gray-500 uppercase tracking-wide">Chế độ lặp lại</label>
+                        <select
+                          value={selectedCampaign.schedule_mode || ""}
+                          onChange={async (e) => {
+                            const mode = e.target.value;
+                            const payload: any = { schedule_mode: mode || null, repeat_enabled: !!mode };
+                            if (mode === "interval") {
+                              const mins = selectedCampaign.repeat_interval_minutes || 30;
+                              payload.schedule_interval_minutes = mins;
+                              payload.repeat_interval_minutes = mins;
+                            }
+                            if (!mode) { payload.next_run_at = null; }
+                            await updateRepeatSchedule(payload);
+                          }}
+                          className="w-full h-10 bg-gray-55 border border-gray-200 rounded px-3 text-xs font-bold text-gray-900 focus:bg-white focus:outline-none cursor-pointer"
+                        >
+                          <option value="">Chạy một lần (không lặp lại)</option>
+                          <option value="interval">Lặp theo khoảng thời gian (phút)</option>
+                          <option value="fixed_times">Lặp theo giờ cố định trong ngày</option>
+                        </select>
+                      </div>
+                      {selectedCampaign.schedule_mode === "interval" && (
+                        <div>
+                          <label className="block mb-1.5 text-[10px] font-extrabold text-gray-500 uppercase tracking-wide">Khoảng cách giữa các lần (phút)</label>
+                          <select
+                            value={selectedCampaign.repeat_interval_minutes || 30}
+                            onChange={async (e) => {
+                              const mins = Number(e.target.value);
+                              await updateRepeatSchedule({ schedule_interval_minutes: mins, repeat_interval_minutes: mins });
+                            }}
+                            className="w-full h-10 bg-gray-55 border border-gray-200 rounded px-3 text-xs font-bold text-gray-900 focus:bg-white focus:outline-none cursor-pointer"
+                          >
+                            <option value={5}>Mỗi 5 phút</option>
+                            <option value={10}>Mỗi 10 phút</option>
+                            <option value={15}>Mỗi 15 phút</option>
+                            <option value={30}>Mỗi 30 phút</option>
+                            <option value={60}>Mỗi 1 giờ</option>
+                            <option value={120}>Mỗi 2 giờ</option>
+                            <option value={240}>Mỗi 4 giờ</option>
+                            <option value={480}>Mỗi 8 giờ</option>
+                            <option value={720}>Mỗi 12 giờ</option>
+                            <option value={1440}>Mỗi 24 giờ</option>
+                          </select>
+                        </div>
+                      )}
+                      {selectedCampaign.schedule_mode === "fixed_times" && (
+                        <div>
+                          <input
+                            type="text"
+                            key={selectedCampaign.id + "-fixed"}
+                            defaultValue={(selectedCampaign.schedule_fixed_times || []).join(", ")}
+                            placeholder="Ví dụ: 08:00, 12:00, 18:00"
+                            onBlur={async (e) => {
+                              const times = e.target.value.split(/[,;\s]+/).map(t => t.trim()).filter(t => /^\d{2}:\d{2}$/.test(t));
+                              if (times.length === 0) return;
+                              await updateRepeatSchedule({ schedule_fixed_times: times });
+                            }}
+                            className="w-full h-10 bg-gray-55 border border-gray-200 rounded px-3 text-xs font-semibold text-gray-900 focus:bg-white focus:outline-none"
+                          />
+                          <span className="text-[10px] text-gray-400 font-medium mt-1 block">Giờ theo múi giờ Việt Nam (GMT+7). Cách nhau bằng dấu phẩy.</span>
+                        </div>
+                      )}
+                      {selectedCampaign.next_run_at && (
+                        <p className="text-[10px] font-bold text-indigo-500">
+                          Lần chạy kế tiếp: {formatVietnamDateTime(selectedCampaign.next_run_at)}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <>
                   <select
                     value={selectedCampaign.repeat_enabled ? String(selectedCampaign.repeat_interval_minutes || 60) : "off"}
                     onChange={(e) => {
@@ -856,14 +1175,16 @@ export default function Campaigns() {
                       Lần chạy kế tiếp: {selectedCampaign.next_run_at ? formatVietnamDateTime(selectedCampaign.next_run_at) : "sau khi vòng hiện tại hoàn tất"}
                     </p>
                   )}
+                    </>
+                  )}
                 </div>
               )}
 
             {/* Split Section: Imports */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* Col 1: URLs */}
-              <div className="space-y-4">
+            <div className={`grid grid-cols-1 gap-8 ${selectedCampaign.platform !== "Facebook" ? "md:grid-cols-2" : ""}`}>
+
+              {/* Col 1: URLs (hidden for Facebook) */}
+              {selectedCampaign.platform !== "Facebook" && <div className="space-y-4">
                 <div className="flex justify-between items-center px-1">
                   <h4 className="text-xs font-extrabold uppercase tracking-widest text-gray-500">Đường dẫn bài viết (URLs)</h4>
                   <span className="text-[10px] text-gray-500 font-bold">
@@ -881,7 +1202,7 @@ export default function Campaigns() {
                       <textarea
                         value={bulkUrls}
                         onChange={(e) => setBulkUrls(e.target.value)}
-                        placeholder="Nhập danh sách bài viết (mỗi dòng một đường dẫn bài đăng, ví dụ: https://x.com/user/status/123)"
+                        placeholder={selectedCampaign.platform === "Facebook" ? "Nhập danh sách link bài viết Facebook (mỗi dòng một link, ví dụ: https://www.facebook.com/page/posts/123456)" : "Nhập danh sách bài viết (mỗi dòng một đường dẫn bài đăng, ví dụ: https://x.com/user/status/123)"}
                         rows={3}
                         className="w-full bg-white border border-gray-200 rounded-md p-3.5 text-xs font-medium text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
                       />
@@ -1047,58 +1368,286 @@ export default function Campaigns() {
                     </>
                   )}
                 </div>
-              </div>
+              </div>}
 
-              {/* Col 2: Comment Templates */}
+              {/* Col 2: Comment Templates / Post Content */}
               <div className="space-y-4">
                 <div className="flex justify-between items-center px-1">
-                  <h4 className="text-xs font-extrabold uppercase tracking-widest text-gray-500">Mẫu nội dung bình luận</h4>
+                  <h4 className="text-xs font-extrabold uppercase tracking-widest text-gray-500">
+                    {selectedCampaign.platform === "Facebook" ? "Danh sách bài đăng" : "Mẫu nội dung bình luận"}
+                  </h4>
                   <span className="text-[10px] text-gray-500 font-bold">Đã tải {campaignTemplates.length}</span>
                 </div>
 
-                <div className="space-y-2">
-                    <textarea
-                      value={bulkTemplates}
-                      onChange={(e) => setBulkTemplates(e.target.value)}
-                      placeholder="Nhập nội dung bình luận (mỗi dòng một nội dung bình luận khác nhau)"
-                      rows={3}
-                      className="w-full bg-white border border-gray-200 rounded-md p-3.5 text-xs font-medium text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
-                    />
-                    {bulkTemplates.trim() && (
-                      <div className={`rounded-md border px-3 py-2 text-[11px] font-bold ${
-                        parsedBulkTemplates.length > 0
-                          ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                          : "bg-amber-50 border-amber-200 text-amber-700"
-                      }`}>
-                        Đã nhận {parsedBulkTemplates.length} mẫu bình luận.
+                {selectedCampaign.platform === "Facebook" ? (
+                  /* ── Facebook card-based post list ── */
+                  <div className="space-y-3">
+
+                    {campaignTemplates.length === 0 && !showAddFbPost && (
+                      <div className="bg-white border border-dashed border-gray-300 rounded-lg p-8 text-center text-gray-400 text-xs font-bold">
+                        Chưa có bài đăng nào. Nhấn nút bên dưới để thêm.
                       </div>
                     )}
-                    <button
-                      onClick={handleImportTemplates}
-                      disabled={Boolean(bulkTemplates.trim()) && parsedBulkTemplates.length === 0}
-                      className="w-full h-11 bg-white hover:bg-gray-50 border border-gray-200 text-[#3B82F6] font-extrabold rounded-md text-xs transition-all duration-200 hover:scale-105 cursor-pointer shadow-none disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
-                    >
-                      📥 Nhập danh sách nội dung
-                    </button>
-                </div>
 
-                <div className="bg-white border border-gray-200 rounded-md p-4 max-h-56 overflow-y-auto space-y-2 shadow-none">
-                  {campaignTemplates.length === 0 ? (
-                    <p className="text-center text-gray-400 text-xs font-bold py-6">Chưa có mẫu bình luận nào được nhập.</p>
-                  ) : (
-                    campaignTemplates.map((tpl) => (
-                      <div key={tpl.id} className="p-3 bg-gray-50 rounded border border-gray-200 text-[11px] text-gray-600 font-bold truncate shadow-none">
-                        "{tpl.content}"
-                      </div>
-                    ))
-                  )}
-                </div>
+                    <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
+                      {campaignTemplates.map((tpl, idx) => {
+                        if (tpl.published_at) {
+                          return (
+                            <div key={tpl.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4 opacity-65">
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="bg-emerald-100 text-emerald-700 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full border border-emerald-200">✓ Đã đăng</span>
+                                  <span className="text-[10px] font-mono text-gray-400">{formatVietnamDateTime(tpl.published_at)}</span>
+                                </div>
+                                <button onClick={() => deleteFbTemplate(tpl.id)} className="text-[10px] font-bold text-gray-400 hover:text-red-500 transition-colors cursor-pointer">Xóa</button>
+                              </div>
+                              <div className={`grid gap-3 ${tpl.image_url ? "grid-cols-[1fr_130px]" : "grid-cols-1"}`}>
+                                <p className="text-xs text-gray-600 whitespace-pre-wrap break-words leading-relaxed">{tpl.content}</p>
+                                {tpl.image_url && <img src={tpl.image_url} alt="" className="w-full h-20 object-cover rounded-lg border border-gray-200" onError={e => (e.currentTarget.style.display="none")} />}
+                              </div>
+                              {tpl.first_comment && (
+                                <div className="mt-3 pl-3 border-l-2 border-indigo-200">
+                                  <p className="text-[10px] font-extrabold text-indigo-500 uppercase tracking-wide mb-0.5">
+                                    💬 Comment · {tpl.comment_delay_minutes > 0 ? `sau ${tpl.comment_delay_minutes} phút` : "ngay lập tức"}
+                                  </p>
+                                  <p className="text-[11px] text-indigo-700 font-medium leading-relaxed">{tpl.first_comment}</p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                        return (
+                          <div key={tpl.id} className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">Bài #{idx + 1}</span>
+                              <button onClick={() => deleteFbTemplate(tpl.id)} className="text-[10px] font-bold text-gray-400 hover:text-red-500 transition-colors cursor-pointer">✕ Xóa</button>
+                            </div>
+
+                            <div className="grid grid-cols-[1fr_150px] gap-3">
+                              <textarea
+                                key={`content-${tpl.id}`}
+                                defaultValue={tpl.content}
+                                rows={4}
+                                onBlur={(e) => { if (e.target.value.trim() !== tpl.content) updateFbTemplate(tpl.id, { content: e.target.value.trim() }); }}
+                                placeholder="Nội dung bài đăng Facebook..."
+                                className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-xs font-medium text-gray-900 focus:bg-white focus:border-blue-300 focus:outline-none resize-none leading-relaxed"
+                              />
+                              <div className="space-y-1.5">
+                                {tpl.image_url && <img src={tpl.image_url} alt="" className="w-full h-20 object-cover rounded-lg border border-gray-200" onError={e => (e.currentTarget.style.display="none")} />}
+                                <input
+                                  key={`img-${tpl.id}`}
+                                  type="text"
+                                  defaultValue={tpl.image_url || ""}
+                                  onBlur={(e) => { if ((e.target.value.trim() || null) !== (tpl.image_url || null)) updateFbTemplate(tpl.id, { image_url: e.target.value.trim() || null }); }}
+                                  placeholder="URL ảnh..."
+                                  className="w-full h-8 bg-gray-50 border border-gray-200 rounded-lg px-2 text-[10px] font-medium text-gray-900 focus:bg-white focus:outline-none"
+                                />
+                                <label className="cursor-pointer block">
+                                  <span className="flex items-center justify-center h-7 w-full bg-gray-100 hover:bg-gray-200 border border-dashed border-gray-300 rounded-lg text-[10px] text-gray-500 font-bold transition-colors select-none">
+                                    📷 Tải ảnh lên
+                                  </span>
+                                  <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    const url = await uploadImage(file);
+                                    if (url) updateFbTemplate(tpl.id, { image_url: url });
+                                    e.target.value = "";
+                                  }} />
+                                </label>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-[1fr_110px] gap-3 items-start pt-2.5 border-t border-gray-100">
+                              <div>
+                                <label className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wide block mb-1.5">💬 Comment đính kèm</label>
+                                <textarea
+                                  key={`cmt-${tpl.id}`}
+                                  defaultValue={tpl.first_comment || ""}
+                                  rows={2}
+                                  onBlur={(e) => { if ((e.target.value.trim() || null) !== (tpl.first_comment || null)) updateFbTemplate(tpl.id, { first_comment: e.target.value.trim() || null }); }}
+                                  placeholder="Comment đăng kèm sau bài (tuỳ chọn)..."
+                                  className="w-full bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 text-[11px] font-medium text-indigo-900 focus:bg-white focus:outline-none resize-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wide block mb-1.5">⏱ Delay</label>
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    key={`delay-${tpl.id}`}
+                                    type="number"
+                                    min={0}
+                                    defaultValue={tpl.comment_delay_minutes ?? 0}
+                                    onBlur={(e) => { const v = Number(e.target.value); if (v !== (tpl.comment_delay_minutes ?? 0)) updateFbTemplate(tpl.id, { comment_delay_minutes: v }); }}
+                                    className="w-16 h-9 bg-gray-50 border border-gray-200 rounded-lg px-2 text-sm font-bold text-gray-900 focus:bg-white focus:outline-none text-center"
+                                  />
+                                  <span className="text-[10px] text-gray-500 font-bold">phút</span>
+                                </div>
+                                <p className="text-[9px] text-gray-400 mt-1">0 = đăng ngay</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Add new post form (card style) */}
+                      {showAddFbPost && (
+                        <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-extrabold text-blue-700 uppercase tracking-widest">+ Bài đăng mới</span>
+                            <button onClick={() => { setShowAddFbPost(false); setNewFbPost(emptyFbPost); }} className="text-[10px] font-bold text-gray-400 hover:text-red-500 cursor-pointer">✕ Hủy</button>
+                          </div>
+
+                          <div className="grid grid-cols-[1fr_150px] gap-3">
+                            <textarea
+                              value={newFbPost.content}
+                              onChange={(e) => setNewFbPost({ ...newFbPost, content: e.target.value })}
+                              rows={4}
+                              placeholder="Nội dung bài đăng Facebook..."
+                              autoFocus
+                              className="w-full bg-white border border-blue-300 rounded-lg px-3 py-2.5 text-xs font-medium text-gray-900 focus:outline-none resize-none leading-relaxed"
+                            />
+                            <div className="space-y-1.5">
+                              {newFbPost.image_url && <img src={newFbPost.image_url} alt="" className="w-full h-20 object-cover rounded-lg border border-blue-200" onError={e => (e.currentTarget.style.display="none")} />}
+                              <input
+                                type="text"
+                                value={newFbPost.image_url}
+                                onChange={(e) => setNewFbPost({ ...newFbPost, image_url: e.target.value })}
+                                placeholder="URL ảnh..."
+                                className="w-full h-8 bg-white border border-blue-300 rounded-lg px-2 text-[10px] font-medium text-gray-900 focus:outline-none"
+                              />
+                              <label className="cursor-pointer block">
+                                <span className="flex items-center justify-center h-7 w-full bg-blue-100 hover:bg-blue-200 border border-dashed border-blue-300 rounded-lg text-[10px] text-blue-600 font-bold transition-colors select-none">
+                                  📷 Tải ảnh lên
+                                </span>
+                                <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  const url = await uploadImage(file);
+                                  if (url) setNewFbPost(prev => ({ ...prev, image_url: url }));
+                                  e.target.value = "";
+                                }} />
+                              </label>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-[1fr_110px] gap-3 items-start pt-2.5 border-t border-blue-200">
+                            <div>
+                              <label className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wide block mb-1.5">💬 Comment đính kèm</label>
+                              <textarea
+                                value={newFbPost.first_comment}
+                                onChange={(e) => setNewFbPost({ ...newFbPost, first_comment: e.target.value })}
+                                rows={2}
+                                placeholder="Comment đăng kèm sau bài (tuỳ chọn)..."
+                                className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 text-[11px] font-medium text-indigo-900 focus:outline-none resize-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wide block mb-1.5">⏱ Delay</label>
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={newFbPost.comment_delay_minutes}
+                                  onChange={(e) => setNewFbPost({ ...newFbPost, comment_delay_minutes: Number(e.target.value) })}
+                                  className="w-16 h-9 bg-white border border-blue-300 rounded-lg px-2 text-sm font-bold text-gray-900 focus:outline-none text-center"
+                                />
+                                <span className="text-[10px] text-gray-500 font-bold">phút</span>
+                              </div>
+                              <p className="text-[9px] text-gray-400 mt-1">0 = đăng ngay</p>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={addFbTemplate}
+                            className="w-full h-10 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg text-xs transition-all duration-200 cursor-pointer"
+                          >
+                            ✓ Lưu bài đăng
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {!showAddFbPost && (
+                      <button
+                        onClick={() => setShowAddFbPost(true)}
+                        className="w-full h-10 bg-white hover:bg-indigo-50 border border-indigo-200 text-indigo-600 font-extrabold rounded-lg text-xs transition-all duration-200 cursor-pointer"
+                      >
+                        + Thêm bài đăng mới
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  /* ── X / Threads bulk template UI ── */
+                  <>
+                    <div className="space-y-2">
+                      <textarea
+                        value={bulkTemplates}
+                        onChange={(e) => setBulkTemplates(e.target.value)}
+                        placeholder="Nhập nội dung bình luận (mỗi dòng một nội dung bình luận khác nhau)"
+                        rows={3}
+                        className="w-full bg-white border border-gray-200 rounded-md p-3.5 text-xs font-medium text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                      />
+                      {bulkTemplates.trim() && (
+                        <div className={`rounded-md border px-3 py-2 text-[11px] font-bold ${parsedBulkTemplates.length > 0 ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
+                          Đã nhận {parsedBulkTemplates.length} mẫu bình luận.
+                        </div>
+                      )}
+                      <button
+                        onClick={handleImportTemplates}
+                        disabled={Boolean(bulkTemplates.trim()) && parsedBulkTemplates.length === 0}
+                        className="w-full h-11 bg-white hover:bg-gray-50 border border-gray-200 text-[#3B82F6] font-extrabold rounded-md text-xs transition-all duration-200 hover:scale-105 cursor-pointer shadow-none disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
+                      >
+                        📥 Nhập danh sách nội dung
+                      </button>
+                    </div>
+                    <div className="bg-white border border-gray-200 rounded-md p-4 max-h-56 overflow-y-auto space-y-2 shadow-none">
+                      {campaignTemplates.length === 0 ? (
+                        <p className="text-center text-gray-400 text-xs font-bold py-6">Chưa có mẫu bình luận nào được nhập.</p>
+                      ) : (
+                        campaignTemplates.map((tpl, idx) => (
+                          <div key={tpl.id} className="p-3 bg-gray-50 rounded border border-gray-200 text-[11px] text-gray-600 font-bold shadow-none">
+                            <span className="text-gray-400 mr-1">#{idx + 1}</span> "{tpl.content}"
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* Facebook: Job result log (failed & pending comments only — successes visible in cards above) */}
+                {selectedCampaign.platform === "Facebook" && campaignJobs.filter(j => j.job_type === "fb_publish" && (j.status === "FAILED" || j.fb_comment_status === "PENDING" || j.fb_comment_status === "FAILED")).length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-gray-200">
+                    <h5 className="text-[10px] font-extrabold uppercase tracking-widest text-gray-400 px-1">Thông báo & lỗi</h5>
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                      {campaignJobs
+                        .filter(j => j.job_type === "fb_publish" && (j.status === "FAILED" || j.fb_comment_status === "PENDING" || j.fb_comment_status === "FAILED"))
+                        .sort((a, b) => new Date(b.completed_at || b.created_at || 0).getTime() - new Date(a.completed_at || a.created_at || 0).getTime())
+                        .map((job) => (
+                          <div key={job.id} className={`rounded-lg border px-3 py-2.5 text-[11px] font-bold ${job.status === "FAILED" ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
+                            <div className="flex justify-between items-center gap-2">
+                              <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-full ${job.status === "FAILED" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
+                                {job.status === "FAILED" ? "✗ Đăng bài thất bại" : "⏳ Comment đang chờ"}
+                              </span>
+                              {job.completed_at && <span className="font-mono text-[9px] text-gray-400">{formatVietnamDateTime(job.completed_at)}</span>}
+                            </div>
+                            {job.error_message && <p className="mt-1.5 text-[10px] font-mono text-red-600">{job.error_message}</p>}
+                            {job.fb_comment_status === "PENDING" && (
+                              <p className="mt-1 text-[10px] text-amber-700">Comment sẽ đăng sau {job.fb_comment_delay_minutes} phút kể từ khi bài được đăng</p>
+                            )}
+                            {job.fb_comment_status === "FAILED" && (
+                              <p className="mt-1 text-[10px] text-red-600">Lỗi comment: {job.fb_comment_error}</p>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
             </div>
 
             {/* Campaign warnings / error retries */}
-            {campaignUrls.some(u => u.status === "FAILED") && (
+            {selectedCampaign.platform !== "Facebook" && campaignUrls.some(u => u.status === "FAILED") && (
               <div className="bg-red-50 border border-red-200 text-red-600 p-5 rounded-md text-xs font-bold flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-none">
                 <div>
                   <p>⚠️ Chú ý: Một số tác vụ bình luận trong chiến dịch này đã gặp lỗi</p>
@@ -1146,6 +1695,8 @@ export default function Campaigns() {
                   value={newCampaignName}
                   onChange={(e) => setNewCampaignName(e.target.value)}
                   placeholder="Ví dụ: Chiến dịch quảng cáo Threads 2026"
+                  minLength={3}
+                  maxLength={100}
                   className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
                   required
                 />
@@ -1160,9 +1711,11 @@ export default function Campaigns() {
                 >
                   <option value="X">X (Twitter)</option>
                   <option value="Threads">Threads</option>
+                  <option value="Facebook">Facebook Page</option>
                 </select>
               </div>
 
+              {newCampaignPlatform !== "Facebook" && (
               <div>
                 <label className="block mb-1.5 ml-0.5">Loại chiến dịch</label>
                 <select
@@ -1174,8 +1727,79 @@ export default function Campaigns() {
                   <option value="MONITOR">Tự động (Giám sát trang và lấy bài viết mới nhất)</option>
                 </select>
               </div>
+              )}
 
-              {newCampaignType === "MONITOR" && (
+              {newCampaignPlatform === "Facebook" && (
+                <div className="rounded-md border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+                  <p className="text-[10px] font-extrabold uppercase text-indigo-600 tracking-wide">Cấu hình Facebook Page</p>
+                  <div>
+                    <label className="block mb-1.5 ml-0.5 text-xs font-bold text-gray-700">Chọn Facebook Page để đăng bài</label>
+                    {fbAccounts.length === 0 ? (
+                      <p className="text-xs text-amber-600 font-semibold py-2">Chưa có Facebook Page nào. Hãy thêm ở <strong>Tài khoản mạng xã hội</strong> với nền tảng Facebook.</p>
+                    ) : (
+                      <select
+                        value={fbAccountId}
+                        onChange={(e) => setFbAccountId(e.target.value)}
+                        className="w-full h-11 bg-white border border-gray-200 rounded-md px-3 text-xs font-bold text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+                        required
+                      >
+                        <option value="">-- Chọn Page --</option>
+                        {fbAccounts.map((acc) => (
+                          <option key={acc.id} value={acc.id}>{acc.display_name || acc.username}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block mb-1.5 ml-0.5 text-xs font-bold text-gray-700">Lịch đăng bài</label>
+                    <select
+                      value={fbScheduleMode}
+                      onChange={(e) => setFbScheduleMode(e.target.value)}
+                      className="w-full h-11 bg-white border border-gray-200 rounded-md px-3 text-xs font-bold text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+                    >
+                      <option value="">Chạy một lần (không lặp lại)</option>
+                      <option value="interval">Lặp theo khoảng thời gian (phút)</option>
+                      <option value="fixed_times">Lặp theo giờ cố định trong ngày</option>
+                    </select>
+                  </div>
+                  {fbScheduleMode === "interval" && (
+                    <div>
+                      <label className="block mb-1.5 ml-0.5 text-xs font-bold text-gray-700">Khoảng cách giữa các lần chạy</label>
+                      <select
+                        value={fbIntervalMinutes}
+                        onChange={(e) => setFbIntervalMinutes(Number(e.target.value))}
+                        className="w-full h-11 bg-white border border-gray-200 rounded-md px-3 text-xs font-bold text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+                      >
+                        <option value={5}>Mỗi 5 phút</option>
+                        <option value={10}>Mỗi 10 phút</option>
+                        <option value={15}>Mỗi 15 phút</option>
+                        <option value={30}>Mỗi 30 phút</option>
+                        <option value={60}>Mỗi 1 giờ</option>
+                        <option value={120}>Mỗi 2 giờ</option>
+                        <option value={240}>Mỗi 4 giờ</option>
+                        <option value={480}>Mỗi 8 giờ</option>
+                        <option value={720}>Mỗi 12 giờ</option>
+                        <option value={1440}>Mỗi 24 giờ</option>
+                      </select>
+                    </div>
+                  )}
+                  {fbScheduleMode === "fixed_times" && (
+                    <div>
+                      <label className="block mb-1.5 ml-0.5 text-xs font-bold text-gray-700">Danh sách giờ cố định trong ngày (HH:MM)</label>
+                      <input
+                        type="text"
+                        value={fbFixedTimes}
+                        onChange={(e) => setFbFixedTimes(e.target.value)}
+                        placeholder="Ví dụ: 08:00, 12:00, 18:00, 22:00"
+                        className="w-full h-11 bg-white border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+                      />
+                      <span className="text-[10px] text-gray-400 font-medium mt-1 block">Nhập giờ cách nhau bằng dấu phẩy. Giờ theo UTC.</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {newCampaignPlatform !== "Facebook" && newCampaignType === "MONITOR" && (
                 <>
                   <div>
                     <label className="block mb-1.5 ml-0.5">Link trang cần giám sát (Profile/Page Links)</label>
@@ -1210,7 +1834,7 @@ export default function Campaigns() {
                 </>
               )}
 
-              {newCampaignType === "STATIC" && (
+              {newCampaignPlatform !== "Facebook" && newCampaignType === "STATIC" && (
                 <div className="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
                   <label className="flex items-center gap-2 text-xs font-extrabold text-gray-700 cursor-pointer">
                     <input

@@ -4,9 +4,10 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class AccountCreate(BaseModel):
-    platform: str = Field(..., pattern="^(X|Threads)$")
+    platform: str = Field(..., pattern="^(X|Threads|Facebook)$")
     username: str = Field(..., min_length=1)
     display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
     cookie: Optional[str] = None
     access_token: Optional[str] = None
     threads_user_id: Optional[str] = None
@@ -32,6 +33,7 @@ class AccountOut(BaseModel):
     platform: str
     username: str
     display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
     cookie: Optional[str] = None
     has_cookie: bool = False
     has_access_token: bool = False

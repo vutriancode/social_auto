@@ -122,16 +122,16 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
+    <div className="space-y-8 pb-8 animate-slide-up">
       {/* Toasts */}
       <div className="fixed top-6 right-6 z-50 space-y-3">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`flex items-center px-4 py-3 rounded-lg border-2 text-sm font-bold tracking-wide ${
+            className={`flex items-center px-5 py-3.5 rounded-md border text-sm font-bold tracking-wide transition-all shadow-none ${
               t.type === "error"
-                ? "bg-red-50 border-red-500 text-red-700"
-                : "bg-emerald-50 border-emerald-500 text-emerald-700"
+                ? "bg-red-50 border-red-200 text-red-600"
+                : "bg-emerald-50 border-emerald-200 text-emerald-600"
             }`}
           >
             <span>{t.message}</span>
@@ -139,107 +139,103 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-gray-900 mb-8">⚙️ Cài Đặt Tài Khoản</h1>
+      {/* User Profile Card */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg shadow-none p-6">
+        <h2 className="text-xs font-extrabold text-gray-900 uppercase tracking-wider mb-5">Thông tin tài khoản</h2>
 
-        {/* User Profile Card */}
-        <div className="bg-white rounded-lg shadow-md border border-gray-200 p-8 mb-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">👤 Thông Tin Tài Khoản</h2>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Username</label>
-              <input
-                type="text"
-                value={userInfo?.username || ""}
-                readOnly
-                className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg text-gray-700 font-medium"
-              />
-            </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">Username</label>
+            <input
+              type="text"
+              value={userInfo?.username || ""}
+              readOnly
+              className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900"
+            />
+          </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">User ID</label>
-              <input
-                type="text"
-                value={userInfo?.id || ""}
-                readOnly
-                className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg text-gray-600 text-sm font-mono"
-              />
-            </div>
+          <div>
+            <label className="block text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">User ID</label>
+            <input
+              type="text"
+              value={userInfo?.id || ""}
+              readOnly
+              className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-mono text-gray-500"
+            />
+          </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Ngày Tạo</label>
-              <input
-                type="text"
-                value={userInfo?.created_at ? new Date(userInfo.created_at).toLocaleDateString("vi-VN") : ""}
-                readOnly
-                className="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg text-gray-700"
-              />
-            </div>
+          <div>
+            <label className="block text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">Ngày tạo</label>
+            <input
+              type="text"
+              value={userInfo?.created_at ? new Date(userInfo.created_at).toLocaleDateString("vi-VN") : ""}
+              readOnly
+              className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900"
+            />
           </div>
         </div>
+      </div>
 
-        {/* Change Password Card */}
-        <div className="bg-white rounded-lg shadow-md border border-gray-200 p-8 mb-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">🔐 Đổi Mật Khẩu</h2>
+      {/* Change Password Card */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg shadow-none p-6">
+        <h2 className="text-xs font-extrabold text-gray-900 uppercase tracking-wider mb-5">Đổi mật khẩu</h2>
 
-          <form onSubmit={handleChangePassword} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Mật Khẩu Cũ</label>
-              <input
-                type="password"
-                value={oldPassword}
-                onChange={(e) => setOldPassword(e.target.value)}
-                placeholder="Nhập mật khẩu hiện tại"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={changingPassword}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Mật Khẩu Mới</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={changingPassword}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Xác Nhận Mật Khẩu Mới</label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Nhập lại mật khẩu mới"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={changingPassword}
-              />
-            </div>
-
-            <button
-              type="submit"
+        <form onSubmit={handleChangePassword} className="space-y-4">
+          <div>
+            <label className="block text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">Mật khẩu cũ</label>
+            <input
+              type="password"
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+              placeholder="Nhập mật khẩu hiện tại"
+              className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
               disabled={changingPassword}
-              className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-50 transition-all"
-            >
-              {changingPassword ? "Đang xử lý..." : "🔄 Đổi Mật Khẩu"}
-            </button>
-          </form>
-        </div>
+            />
+          </div>
 
-        {/* Logout Card */}
-        <div className="bg-white rounded-lg shadow-md border border-gray-200 p-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">🚪 Đăng Xuất</h2>
+          <div>
+            <label className="block text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">Mật khẩu mới</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)"
+              className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+              disabled={changingPassword}
+            />
+          </div>
+
+          <div>
+            <label className="block text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">Xác nhận mật khẩu mới</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Nhập lại mật khẩu mới"
+              className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+              disabled={changingPassword}
+            />
+          </div>
+
           <button
-            onClick={handleLogout}
-            className="w-full bg-red-600 text-white py-3 px-4 rounded-lg font-bold hover:bg-red-700 transition-all"
+            type="submit"
+            disabled={changingPassword}
+            className="w-full h-11 bg-[#3B82F6] hover:bg-blue-600 text-white font-bold rounded-md text-xs transition-all duration-200 disabled:opacity-50 cursor-pointer"
           >
-            ✈️ Đăng Xuất Ngay
+            {changingPassword ? "Đang xử lý..." : "Đổi mật khẩu"}
           </button>
-        </div>
+        </form>
+      </div>
+
+      {/* Logout Card */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg shadow-none p-6">
+        <h2 className="text-xs font-extrabold text-gray-900 uppercase tracking-wider mb-5">Đăng xuất</h2>
+        <button
+          onClick={handleLogout}
+          className="w-full h-11 bg-white border border-red-200 text-red-600 hover:bg-red-50 font-bold rounded-md text-xs transition-all duration-200 cursor-pointer"
+        >
+          Đăng xuất ngay
+        </button>
       </div>
     </div>
   );

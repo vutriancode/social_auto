@@ -28,7 +28,7 @@ def serialize_doc(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
                 for item in value
             ]
         elif key.endswith("_id") or key == "user_id":
-            new_doc[key] = str(value)
+            new_doc[key] = str(value) if value is not None else None
         else:
             new_doc[key] = value
 

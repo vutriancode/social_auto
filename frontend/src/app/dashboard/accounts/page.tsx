@@ -724,6 +724,11 @@ export default function Accounts() {
   const [bulkImporting, setBulkImporting] = useState(false);
   const [fileAccounts, setFileAccounts] = useState([]);
 
+  // Facebook token resolve state
+  const [fbResolving, setFbResolving] = useState(false);
+  const [fbResolved, setFbResolved] = useState<{name: string; avatar_url: string; page_id: string} | null>(null);
+  const [fbResolveError, setFbResolveError] = useState("");
+
   // Add Proxy States
   const [newProxy, setNewProxy] = useState("");
 
@@ -740,6 +745,7 @@ export default function Accounts() {
   };
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editCookie, setEditCookie] = useState("");
+  const [editAccessToken, setEditAccessToken] = useState("");
   const [editDailyLimit, setEditDailyLimit] = useState(50);
   const [editHourlyLimit, setEditHourlyLimit] = useState(5);
   const [checkingId, setCheckingId] = useState(null);
@@ -1087,6 +1093,24 @@ export default function Accounts() {
     loadAccounts();
   }, [currentPage, limit]);
 
+  const resolveToken = async (token: string) => {
+    if (!token.trim()) return;
+    setFbResolving(true);
+    setFbResolved(null);
+    setFbResolveError("");
+    try {
+      const data = await apiFetch("/api/accounts/facebook/resolve-token", {
+        method: "POST",
+        body: JSON.stringify({ token: token.trim(), proxy: newProxy.trim() || null }),
+      });
+      setFbResolved(data);
+    } catch (err: any) {
+      setFbResolveError(err.message || "Không lấy được thông tin Page");
+    } finally {
+      setFbResolving(false);
+    }
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
 
@@ -1094,7 +1118,18 @@ export default function Accounts() {
     let username = newUsername.trim();
     let displayName = newDisplayName.trim();
 
-    if (newPlatform === "Threads" && newAuthMode === "api") {
+    if (newPlatform === "Facebook") {
+      if (!newAccessToken.trim()) {
+        showToast("Vui lòng nhập Page Access Token cho tài khoản Facebook.", "error");
+        return;
+      }
+      if (!fbResolved) {
+        showToast("Vui lòng chờ hệ thống xác thực token và lấy thông tin Page.", "error");
+        return;
+      }
+      username = fbResolved.page_id;
+      displayName = fbResolved.name;
+    } else if (newPlatform === "Threads" && newAuthMode === "api") {
       if (!newAccessToken.trim() || !newThreadsUserId.trim()) {
         showToast("Vui lòng nhập đầy đủ Access Token và Threads User ID.", "error");
         return;
@@ -1130,8 +1165,9 @@ export default function Accounts() {
           platform,
           username,
           display_name: displayName,
-          cookie: (newPlatform === "Threads" && newAuthMode === "api") ? null : (newCookie.trim() || null),
-          access_token: (newPlatform === "Threads" && newAuthMode === "api") ? newAccessToken.trim() : null,
+          avatar_url: newPlatform === "Facebook" ? (fbResolved?.avatar_url || null) : null,
+          cookie: (newPlatform === "Threads" && newAuthMode === "api") || newPlatform === "Facebook" ? null : (newCookie.trim() || null),
+          access_token: (newPlatform === "Threads" && newAuthMode === "api") || newPlatform === "Facebook" ? newAccessToken.trim() : null,
           threads_user_id: (newPlatform === "Threads" && newAuthMode === "api") ? newThreadsUserId.trim() : null,
           proxy: newProxy.trim() || null,
           daily_limit: Number(newDailyLimit),
@@ -1146,6 +1182,8 @@ export default function Accounts() {
       setNewThreadsUserId("");
       setNewAuthMode("cookie");
       setNewProxy("");
+      setFbResolved(null);
+      setFbResolveError("");
       setShowAddModal(false);
       loadAccounts();
     } catch (err) {
@@ -1209,6 +1247,7 @@ export default function Accounts() {
       setEditingAccount(detail);
       setEditDisplayName(detail.display_name || "");
       setEditCookie(detail.cookie || "");
+      setEditAccessToken(detail.platform === "Facebook" ? (detail.access_token || "") : "");
       setEditDailyLimit(detail.daily_limit || 50);
       setEditHourlyLimit(detail.hourly_limit || 5);
       setShowEditModal(true);
@@ -1225,7 +1264,11 @@ export default function Accounts() {
         daily_limit: Number(editDailyLimit),
         hourly_limit: Number(editHourlyLimit)
       };
-      if (editCookie.trim()) payload.cookie = editCookie.trim();
+      if (editingAccount?.platform === "Facebook") {
+        if (editAccessToken.trim()) payload.access_token = editAccessToken.trim();
+      } else {
+        if (editCookie.trim()) payload.cookie = editCookie.trim();
+      }
 
       await apiFetch(`/api/accounts/${editingAccount.id}`, {
         method: "PATCH",
@@ -1438,7 +1481,7 @@ export default function Accounts() {
   }
 
   return (
-    <div className="space-y-6 pb-8 animate-slide-in">
+    <div className="space-y-8 pb-8 animate-slide-in">
       
       {/* Toast notifications handler */}
       <div className="fixed top-6 right-6 z-50 space-y-3">
@@ -1502,16 +1545,16 @@ export default function Accounts() {
       </div>
 
       {/* Account Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {accounts.length === 0 ? (
           <div className="col-span-full bg-gray-50 border border-gray-200 rounded-lg p-12 text-center text-gray-500 font-bold text-xs shadow-none">
             Chưa có tài khoản nào được kết nối. Sử dụng nút bên trên để đăng ký tài khoản.
           </div>
         ) : (
           accounts.map((acc) => (
-            <div 
-              key={acc.id} 
-              className="bg-gray-50 border border-gray-200 rounded-lg p-6 shadow-none transition-all duration-200 hover:scale-[1.02] relative overflow-hidden flex flex-col justify-between min-h-[450px] h-auto pb-6"
+            <div
+              key={acc.id}
+              className="bg-gray-50 border border-gray-200 rounded-lg p-7 shadow-none transition-all duration-200 hover:scale-[1.02] relative overflow-hidden flex flex-col justify-between min-h-[450px] h-auto pb-6"
             >
               
               {/* Badge Top-right */}
@@ -1526,8 +1569,10 @@ export default function Accounts() {
                   {acc.has_access_token ? "Đã cấu hình Token" : acc.has_cookie ? "Đã cấu hình Cookie" : "Chưa cấu hình"}
                 </span>
                 <span className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase ${
-                  acc.platform === "X" 
-                    ? "bg-blue-50 text-blue-700 border border-blue-200" 
+                  acc.platform === "X"
+                    ? "bg-blue-50 text-blue-700 border border-blue-200"
+                    : acc.platform === "Facebook"
+                    ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
                     : "bg-purple-50 text-purple-700 border border-purple-200"
                 }`}>
                   {acc.platform}
@@ -1536,19 +1581,23 @@ export default function Accounts() {
 
               {/* Avatar and name */}
               <div className="flex items-center space-x-3.5 pl-1 pt-2">
-                <div className="w-12 h-12 rounded-md bg-white border border-gray-200 flex items-center justify-center text-[#3B82F6] font-extrabold uppercase text-base">
-                  {acc.username.substring(0, 2)}
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-gray-900 text-sm leading-snug">{acc.display_name}</h4>
+                {acc.avatar_url ? (
+                  <img src={acc.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover border border-gray-200 shrink-0" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                ) : (
+                  <div className="w-12 h-12 rounded-md bg-white border border-gray-200 flex items-center justify-center text-[#3B82F6] font-extrabold uppercase text-base shrink-0">
+                    {acc.username.substring(0, 2)}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <h4 className="font-extrabold text-gray-900 text-sm leading-snug truncate">{acc.display_name}</h4>
                   <a
-                    href={acc.platform === "X" ? `https://x.com/${acc.username}` : `https://www.threads.net/@${acc.username}`}
+                    href={acc.platform === "X" ? `https://x.com/${acc.username}` : acc.platform === "Facebook" ? `https://www.facebook.com/${acc.username}` : `https://www.threads.net/@${acc.username}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-gray-500 hover:text-blue-500 text-xs font-semibold flex items-center space-x-0.5 hover:underline cursor-pointer"
                   >
-                    <span>@{acc.username}</span>
-                    <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <span className="truncate">{acc.platform === "Facebook" ? acc.display_name || acc.username : `@${acc.username}`}</span>
+                    <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                     </svg>
                   </a>
@@ -1740,60 +1789,64 @@ export default function Accounts() {
                           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                           </svg>
-                          <span>Kiểm tra Cookie</span>
+                          <span>{acc.platform === "Facebook" ? "Kiểm tra Token" : "Kiểm tra Cookie"}</span>
                         </>
                       )}
                     </button>
-                    <button
-                      onClick={() => handleAutoLogin(acc.id, acc.platform, acc.username)}
-                      disabled={loginLoadingId === acc.id || !acc.has_cookie}
-                      className="flex-1 h-10 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-600 font-extrabold rounded-md transition-all duration-200 hover:scale-[1.02] flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed text-xs"
-                    >
-                      {loginLoadingId === acc.id ? (
-                        <>
-                          <svg className="animate-spin -ml-1 mr-1 h-3.5 w-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                          <span>Đang xử lý...</span>
-                        </>
-                      ) : (
-                        <>
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                          </svg>
-                          <span>🔑 Đăng nhập</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-
-                    <div className="flex items-center gap-2">
+                    {acc.platform !== "Facebook" && (
                       <button
-                        onClick={() => handleRefreshCookie(acc.id)}
-                        disabled={refreshingId === acc.id || bulkRefreshing || (!acc.has_cookie && !acc.has_access_token)}
-                        className="flex-1 h-10 bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-600 font-extrabold rounded-md transition-all duration-200 hover:scale-[1.02] flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed text-xs"
+                        onClick={() => handleAutoLogin(acc.id, acc.platform, acc.username)}
+                        disabled={loginLoadingId === acc.id || !acc.has_cookie}
+                        className="flex-1 h-10 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-600 font-extrabold rounded-md transition-all duration-200 hover:scale-[1.02] flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed text-xs"
                       >
-                        {refreshingId === acc.id ? (
+                        {loginLoadingId === acc.id ? (
                           <>
-                            <svg className="animate-spin -ml-1 mr-1 h-3.5 w-3.5 text-orange-600" fill="none" viewBox="0 0 24 24">
+                            <svg className="animate-spin -ml-1 mr-1 h-3.5 w-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                             </svg>
-                            <span>Đang refresh...</span>
+                            <span>Đang xử lý...</span>
                           </>
                         ) : (
                           <>
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                             </svg>
-                            <span>🔄 Refresh Cookie</span>
+                            <span>🔑 Đăng nhập</span>
                           </>
                         )}
                       </button>
+                    )}
+                  </div>
+
+                    <div className="flex items-center gap-2">
+                      {acc.platform !== "Facebook" && (
+                        <button
+                          onClick={() => handleRefreshCookie(acc.id)}
+                          disabled={refreshingId === acc.id || bulkRefreshing || (!acc.has_cookie && !acc.has_access_token)}
+                          className="flex-1 h-10 bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-600 font-extrabold rounded-md transition-all duration-200 hover:scale-[1.02] flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed text-xs"
+                        >
+                          {refreshingId === acc.id ? (
+                            <>
+                              <svg className="animate-spin -ml-1 mr-1 h-3.5 w-3.5 text-orange-600" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                              <span>Đang refresh...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                              <span>🔄 Refresh Cookie</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                       <button
                         onClick={() => { setShowPostModal(true); setPostAccountId(acc.id); setPostAccountPlatform(acc.platform || "X"); setPostTargetUrl(''); setPostText(''); }}
-                        className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-600 font-extrabold rounded-md px-3 h-10 transition-all duration-200 hover:scale-[1.02] text-xs"
+                        className={`${acc.platform === "Facebook" ? "flex-1" : ""} bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-600 font-extrabold rounded-md px-3 h-10 transition-all duration-200 hover:scale-[1.02] text-xs`}
                       >
                         💬 Post
                       </button>
@@ -1899,6 +1952,7 @@ export default function Accounts() {
                 >
                   <option value="X">X (Twitter)</option>
                   <option value="Threads">Threads</option>
+                  <option value="Facebook">Facebook Page</option>
                 </select>
               </div>
 
@@ -1926,7 +1980,45 @@ export default function Accounts() {
                 </div>
               )}
 
-              {newPlatform === "Threads" && newAuthMode === "api" ? (
+              {newPlatform === "Facebook" ? (
+                <>
+                  <div>
+                    <label className="block mb-1.5 ml-0.5">Page Access Token</label>
+                    <textarea
+                      value={newAccessToken}
+                      onChange={(e) => { setNewAccessToken(e.target.value); setFbResolved(null); setFbResolveError(""); }}
+                      onBlur={(e) => resolveToken(e.target.value)}
+                      placeholder="Dán Page Access Token vào đây — tên và ảnh Page sẽ tự động điền..."
+                      rows={3}
+                      className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                      required
+                    />
+                    <span className="text-[10px] text-gray-400 font-medium mt-1 block">Token phải có quyền <strong>pages_manage_posts</strong>. Tên và ảnh Page sẽ tự lấy từ token.</span>
+                  </div>
+                  {fbResolving && (
+                    <div className="flex items-center gap-2 text-xs text-indigo-600 font-bold animate-pulse">
+                      <span>⏳ Đang lấy thông tin Page...</span>
+                    </div>
+                  )}
+                  {fbResolveError && (
+                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
+                      ✗ {fbResolveError}
+                    </div>
+                  )}
+                  {fbResolved && (
+                    <div className="flex items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                      {fbResolved.avatar_url && (
+                        <img src={fbResolved.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover border border-emerald-200 shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold text-gray-900 truncate">{fbResolved.name}</p>
+                        <p className="text-[10px] font-mono text-gray-500 truncate">ID: {fbResolved.page_id}</p>
+                        <p className="text-[10px] font-bold text-emerald-600">✓ Token hợp lệ</p>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : newPlatform === "Threads" && newAuthMode === "api" ? (
                 <>
                   <div>
                     <label className="block mb-1.5 ml-0.5">Tên tài khoản Threads (Username)</label>
@@ -2117,6 +2209,7 @@ export default function Accounts() {
                             >
                               <option value="X">X (Twitter)</option>
                               <option value="Threads">Threads</option>
+                              <option value="Facebook">Facebook Page</option>
                             </select>
                           </div>
                           <div>
@@ -2347,10 +2440,12 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
             
             <form onSubmit={handleUpdate} className="space-y-4 text-xs font-bold text-gray-600">
               <div>
-                <label className="block mb-1.5 ml-0.5">Tên đăng nhập (Chỉ đọc)</label>
+                <label className="block mb-1.5 ml-0.5">
+                  {editingAccount?.platform === "Facebook" ? "Tên Page (Chỉ đọc)" : "Tên đăng nhập (Chỉ đọc)"}
+                </label>
                 <input
                   type="text"
-                  value={`@${editingAccount?.username}`}
+                  value={editingAccount?.platform === "Facebook" ? editingAccount?.username : `@${editingAccount?.username}`}
                   disabled
                   className="w-full h-11 bg-gray-200 border border-gray-200 rounded-md px-4 text-xs font-bold text-gray-500 cursor-not-allowed"
                 />
@@ -2367,31 +2462,45 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                 />
               </div>
 
-              <div>
-                <div className="flex justify-between items-center mb-1.5">
-                  <label className="block ml-0.5">{editingAccount?.platform === "Threads" ? "Chuỗi Session Cookie mới (Tùy chọn)" : "Chuỗi Session Cookie mới"}</label>
-                  <label className="text-[#3B82F6] hover:text-blue-600 cursor-pointer flex items-center gap-1 text-[11px] font-bold">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                    </svg>
-                    Tải từ file
-                    <input
-                      type="file"
-                      accept=".json,.txt,.cookie,*"
-                      className="hidden"
-                      onChange={(e) => handleSingleFileChange(e, "edit")}
-                    />
-                  </label>
+              {editingAccount?.platform === "Facebook" ? (
+                <div>
+                  <label className="block mb-1.5 ml-0.5">Page Access Token mới (Tùy chọn)</label>
+                  <textarea
+                    value={editAccessToken}
+                    onChange={(e) => setEditAccessToken(e.target.value)}
+                    placeholder="Nhập Page Access Token mới để thay thế token hiện tại..."
+                    rows={3}
+                    className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                  />
+                  <span className="text-[10px] text-gray-400 font-medium mt-1 block">Token phải có quyền <strong>pages_manage_engagement</strong>. Để trống nếu không muốn thay đổi.</span>
                 </div>
-                <textarea
-                  value={editCookie}
-                  onChange={(e) => setEditCookie(e.target.value)}
-                  placeholder="Nhập chuỗi cookie mới"
-                  rows={3}
-                  className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
-                />
-                <span className="text-[10px] text-gray-400 font-medium mt-1 block">Thay thế chuỗi session cookie lưu trữ cho tài khoản X hoặc Threads này.</span>
-              </div>
+              ) : (
+                <div>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="block ml-0.5">{editingAccount?.platform === "Threads" ? "Chuỗi Session Cookie mới (Tùy chọn)" : "Chuỗi Session Cookie mới"}</label>
+                    <label className="text-[#3B82F6] hover:text-blue-600 cursor-pointer flex items-center gap-1 text-[11px] font-bold">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                      </svg>
+                      Tải từ file
+                      <input
+                        type="file"
+                        accept=".json,.txt,.cookie,*"
+                        className="hidden"
+                        onChange={(e) => handleSingleFileChange(e, "edit")}
+                      />
+                    </label>
+                  </div>
+                  <textarea
+                    value={editCookie}
+                    onChange={(e) => setEditCookie(e.target.value)}
+                    placeholder="Nhập chuỗi cookie mới"
+                    rows={3}
+                    className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                  />
+                  <span className="text-[10px] text-gray-400 font-medium mt-1 block">Thay thế chuỗi session cookie lưu trữ cho tài khoản X hoặc Threads này.</span>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>

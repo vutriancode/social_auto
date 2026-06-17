@@ -1718,12 +1718,29 @@ async def check_account_connection(
         except Exception as e:
             return False, f"Lỗi phân tích Cookie Threads: {str(e)}"
 
+    if platform == "Facebook":
+        if not access_token:
+            return False, "Tài khoản Facebook Page yêu cầu Page Access Token."
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    "https://graph.facebook.com/v19.0/me",
+                    params={"fields": "id,name", "access_token": access_token},
+                )
+            data = response.json()
+            if response.status_code >= 400 or "error" in data:
+                err = data.get("error", {})
+                return False, f"Facebook token không hợp lệ: {err.get('message', str(data))}"
+            return True, f"Facebook Page token hợp lệ: {data.get('name', data.get('id'))}."
+        except Exception as e:
+            return False, f"Lỗi kiểm tra Facebook token: {str(e)}"
+
     if not cookie:
         return False, "Chưa cấu hình Cookie cho tài khoản này."
-        
+
     try:
         cookies_dict = parse_cookie_to_dict(cookie)
-        
+
         if platform == "X":
             is_mock_cookie = not cookie or "mock" in cookie.lower() or len(cookie) <= 20
             csrf_token = cookies_dict.get("ct0")
@@ -1746,6 +1763,119 @@ async def check_account_connection(
             return False, f"Nền tảng {platform} chưa được hỗ trợ kiểm tra."
     except Exception as e:
         return False, f"Lỗi phân tích Cookie: {str(e)}"
+
+
+def extract_fb_post_id(url: str) -> str:
+    """Extract the Facebook post ID from a post URL.
+    Returns the best-guess post_id string for use with the Graph API."""
+    import urllib.parse
+    url = url.strip()
+    parsed = urllib.parse.urlparse(url)
+    qs = urllib.parse.parse_qs(parsed.query)
+
+    # permalink.php?story_fbid=XXX&id=YYY → {page_id}_{story_fbid}
+    story_fbid = qs.get("story_fbid", [None])[0]
+    page_id = qs.get("id", [None])[0]
+    if story_fbid and page_id:
+        return f"{page_id}_{story_fbid}"
+    if story_fbid:
+        return story_fbid
+
+    # ?fbid=XXX
+    fbid = qs.get("fbid", [None])[0]
+    if fbid:
+        return fbid
+
+    # /posts/{id} or /pfbid... patterns
+    m = re.search(r"/posts/(\w+)", url)
+    if m:
+        return m.group(1)
+
+    # groups/{group_id}/posts/{post_id}
+    m = re.search(r"/groups/\d+/posts/(\w+)", url)
+    if m:
+        return m.group(1)
+
+    # /videos/{id}
+    m = re.search(r"/videos/(\d+)", url)
+    if m:
+        return m.group(1)
+
+    # Last resort: take the last numeric segment
+    m = re.search(r"/(\d{10,})", url)
+    if m:
+        return m.group(1)
+
+    # Return as-is (user may have entered a post_id directly)
+    return url
+
+
+async def post_comment_facebook(
+    page_access_token: str,
+    post_id: str,
+    comment_text: str,
+    proxy: Optional[str] = None,
+) -> dict:
+    """Post a comment on a Facebook post using a Page Access Token."""
+    GRAPH = "https://graph.facebook.com/v19.0"
+    proxies = {"all://": proxy} if proxy else None
+    async with httpx.AsyncClient(proxies=proxies, timeout=30.0) as client:
+        r = await client.post(
+            f"{GRAPH}/{post_id}/comments",
+            data={"message": comment_text, "access_token": page_access_token},
+        )
+    data = r.json()
+    if "error" in data:
+        err = data["error"]
+        code = err.get("code")
+        msg = err.get("message", "Facebook API error")
+        if code in (190, 102, 2500, 467):
+            raise SocialAuthError(f"Facebook token hết hạn hoặc không hợp lệ: {msg}")
+        raise RuntimeError(f"Facebook API ({code}): {msg}")
+    return {"success": True, "comment_id": data.get("id", ""), "real_api": True}
+
+
+async def publish_post_facebook(
+    page_access_token: str,
+    message: str,
+    image_url: Optional[str] = None,
+    image_data: Optional[bytes] = None,
+    image_filename: str = "image.jpg",
+    proxy: Optional[str] = None,
+) -> dict:
+    """Publish a new post (or photo post) on a Facebook Page using a Page Access Token.
+    Pass image_data for binary upload, or image_url for remote URL.
+    """
+    GRAPH = "https://graph.facebook.com/v19.0"
+    proxies = {"all://": proxy} if proxy else None
+    async with httpx.AsyncClient(proxies=proxies, timeout=60.0) as client:
+        if image_data:
+            r = await client.post(
+                f"{GRAPH}/me/photos",
+                data={"message": message, "access_token": page_access_token},
+                files={"source": (image_filename, image_data, "image/jpeg")},
+            )
+        elif image_url:
+            r = await client.post(
+                f"{GRAPH}/me/photos",
+                data={"url": image_url, "message": message, "access_token": page_access_token},
+            )
+        else:
+            r = await client.post(
+                f"{GRAPH}/me/feed",
+                data={"message": message, "access_token": page_access_token},
+            )
+    data = r.json()
+    if "error" in data:
+        err = data["error"]
+        code = err.get("code")
+        msg = err.get("message", "Facebook API error")
+        if code in (190, 102, 2500, 467):
+            raise SocialAuthError(f"Facebook token hết hạn hoặc không hợp lệ: {msg}")
+        raise RuntimeError(f"Facebook API ({code}): {msg}")
+    # /me/photos returns {id: photo_id, post_id: post_id}; /me/feed returns {id: post_id}
+    post_id = data.get("post_id") or data.get("id", "")
+    return {"success": True, "post_id": post_id, "real_api": True}
 
 
 async def fetch_real_latest_post(platform: str, page_url: str, cookie_str: Optional[str] = None, proxy: Optional[str] = None) -> str:

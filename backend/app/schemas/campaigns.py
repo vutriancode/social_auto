@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class CampaignCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=100)
-    platform: str = Field(..., pattern="^(X|Threads)$")
+    platform: str = Field(..., pattern="^(X|Threads|Facebook)$")
     description: Optional[str] = ""
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -16,6 +16,12 @@ class CampaignCreate(BaseModel):
     monitor_interval: Optional[int] = Field(15, ge=1)
     repeat_enabled: bool = False
     repeat_interval_minutes: Optional[int] = Field(None, ge=1)
+    # Facebook-specific scheduling
+    schedule_mode: Optional[str] = Field(None, pattern="^(interval|fixed_times)$")
+    schedule_interval_hours: Optional[int] = Field(None, ge=1)
+    schedule_interval_minutes: Optional[int] = Field(None, ge=1)
+    schedule_fixed_times: Optional[List[str]] = None  # ["08:00", "12:00", "18:00"]
+    facebook_account_id: Optional[str] = None  # ObjectId of the Facebook Page account
 
 
 class CampaignUpdate(BaseModel):
@@ -30,6 +36,12 @@ class CampaignUpdate(BaseModel):
     monitor_interval: Optional[int] = Field(None, ge=1)
     repeat_enabled: Optional[bool] = None
     repeat_interval_minutes: Optional[int] = Field(None, ge=1)
+    schedule_mode: Optional[str] = Field(None, pattern="^(interval|fixed_times)$")
+    schedule_interval_hours: Optional[int] = Field(None, ge=1)
+    schedule_interval_minutes: Optional[int] = Field(None, ge=1)
+    schedule_fixed_times: Optional[List[str]] = None
+    facebook_account_id: Optional[str] = None
+    next_run_at: Optional[datetime] = None
 
 
 class CampaignOut(BaseModel):
@@ -51,6 +63,11 @@ class CampaignOut(BaseModel):
     repeat_interval_minutes: Optional[int] = None
     next_run_at: Optional[str] = None
     last_repeat_run_at: Optional[str] = None
+    schedule_mode: Optional[str] = None
+    schedule_interval_hours: Optional[int] = None
+    schedule_interval_minutes: Optional[int] = None
+    schedule_fixed_times: Optional[List[str]] = None
+    facebook_account_id: Optional[str] = None
 
 
 
@@ -85,12 +102,22 @@ class CommentTemplateImport(BaseModel):
     templates: List[str]
 
 
+class FacebookTemplateCreate(BaseModel):
+    content: str
+    image_url: Optional[str] = None
+    first_comment: Optional[str] = None
+    comment_delay_minutes: Optional[int] = Field(0, ge=0)
+
+
 class CommentTemplateUpdate(BaseModel):
     content: Optional[str] = None
     category: Optional[str] = None
     language: Optional[str] = None
     priority: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(ACTIVE|INACTIVE)$")
+    image_url: Optional[str] = None
+    first_comment: Optional[str] = None
+    comment_delay_minutes: Optional[int] = Field(None, ge=0)
 
 
 class CommentTemplateOut(BaseModel):
@@ -101,3 +128,7 @@ class CommentTemplateOut(BaseModel):
     language: str
     priority: str
     status: str
+    image_url: Optional[str] = None
+    first_comment: Optional[str] = None
+    comment_delay_minutes: Optional[int] = 0
+    published_at: Optional[str] = None
