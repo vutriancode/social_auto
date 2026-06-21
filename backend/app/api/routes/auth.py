@@ -137,8 +137,39 @@ async def get_current_user_info(
     return {
         "id": current_user["id"],
         "username": current_user["username"],
-        "created_at": current_user.get("created_at")
+        "created_at": current_user.get("created_at"),
+        "has_openai_api_key": bool(current_user.get("openai_api_key"))
     }
+
+
+class UserSettingsUpdate(BaseModel):
+    openai_api_key: Optional[str] = None
+
+
+@router.patch("/settings")
+async def update_user_settings(
+    req: UserSettingsUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update per-user settings, e.g. the OpenAI API key used to generate AI comment images."""
+    db = get_db()
+    sent_fields = req.model_fields_set
+    update_data = {}
+    if "openai_api_key" in sent_fields:
+        update_data["openai_api_key"] = (req.openai_api_key or "").strip() or None
+
+    if not update_data:
+        return {"has_openai_api_key": bool(current_user.get("openai_api_key"))}
+
+    await db.users.update_one(
+        {"_id": ObjectId(current_user["id"])},
+        {"$set": update_data}
+    )
+    await write_audit_log(
+        current_user["id"], current_user["username"],
+        "UPDATE_SETTINGS", "USER", current_user["id"]
+    )
+    return {"has_openai_api_key": bool(update_data.get("openai_api_key"))}
 
 class ChangePasswordRequest(BaseModel):
     old_password: str

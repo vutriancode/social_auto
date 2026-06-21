@@ -22,6 +22,9 @@ class CampaignCreate(BaseModel):
     schedule_interval_minutes: Optional[int] = Field(None, ge=1)
     schedule_fixed_times: Optional[List[str]] = None  # ["08:00", "12:00", "18:00"]
     facebook_account_id: Optional[str] = None  # ObjectId of the Facebook Page account
+    # Image attached to the Facebook post itself (used when a post has no manually-uploaded image)
+    post_image_mode: Optional[str] = Field("UPLOAD", pattern="^(UPLOAD|FROM_POST|AI_GENERATED)$")
+    post_image_prompt: Optional[str] = None
 
 
 class CampaignUpdate(BaseModel):
@@ -42,6 +45,8 @@ class CampaignUpdate(BaseModel):
     schedule_fixed_times: Optional[List[str]] = None
     facebook_account_id: Optional[str] = None
     next_run_at: Optional[datetime] = None
+    post_image_mode: Optional[str] = Field(None, pattern="^(UPLOAD|FROM_POST|AI_GENERATED)$")
+    post_image_prompt: Optional[str] = None
 
 
 class CampaignOut(BaseModel):
@@ -68,6 +73,8 @@ class CampaignOut(BaseModel):
     schedule_interval_minutes: Optional[int] = None
     schedule_fixed_times: Optional[List[str]] = None
     facebook_account_id: Optional[str] = None
+    post_image_mode: str = "UPLOAD"
+    post_image_prompt: Optional[str] = None
 
 
 

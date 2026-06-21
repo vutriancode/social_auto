@@ -3,6 +3,8 @@ import logging
 import re
 import random
 from datetime import datetime, timedelta, timezone
+from typing import Optional
+import httpx
 import redis.asyncio as redis
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -18,6 +20,8 @@ from app.services.social_mock import (
     post_comment_facebook,
     publish_post_facebook,
     extract_fb_post_id,
+    fetch_random_post_photo,
+    generate_ai_image,
 )
 
 # Configure logging for worker
@@ -32,6 +36,32 @@ REFRESH_QUEUE = "account_refresh_queue"
 SCHEDULED_QUEUE = "campaign_jobs_scheduled"
 
 
+
+
+def extract_first_url(text: Optional[str]) -> Optional[str]:
+    """Finds the first http(s) URL embedded in a piece of comment text, if any."""
+    if not text:
+        return None
+    match = re.search(r"https?://\S+", text)
+    if not match:
+        return None
+    return match.group(0).rstrip(".,;)\"'")
+
+
+def resolve_stored_image_reference(raw_image_url: Optional[str]):
+    """Resolves a stored image reference (local /api/media/ path or remote URL) into
+    (image_url, image_data, image_filename) ready to hand to a Graph API call."""
+    if not raw_image_url:
+        return None, None, "image.jpg"
+    if raw_image_url.startswith("/api/media/"):
+        filename = raw_image_url.split("/api/media/", 1)[1]
+        local_path = f"/app/static/uploads/{filename}"
+        try:
+            with open(local_path, "rb") as fh:
+                return None, fh.read(), filename
+        except OSError:
+            return raw_image_url, None, "image.jpg"
+    return raw_image_url, None, "image.jpg"
 
 
 def normalize_monitor_page_urls(campaign: dict) -> list[str]:
@@ -1042,6 +1072,51 @@ class Worker:
             except Exception as e:
                 logger.error(f"Error in Facebook publish tick for campaign {campaign_id}: {e}")
 
+    async def _resolve_post_image(self, campaign: dict, account: dict, first_comment_text: Optional[str] = None):
+        """Resolves the image bytes to attach to the Facebook POST itself,
+        per the campaign's post_image_mode (FROM_POST / AI_GENERATED). Only called
+        when the template has no manually-uploaded image of its own — UPLOAD mode
+        means "use the per-post image as usual" and needs no dynamic resolution here.
+        Never raises: falls back to no image so a misconfigured image source doesn't
+        block the post itself from being published."""
+        mode = campaign.get("post_image_mode") or "UPLOAD"
+        if mode == "UPLOAD":
+            return None, "image.jpg"
+        try:
+            if mode == "FROM_POST":
+                source_url = extract_first_url(first_comment_text)
+                if not source_url:
+                    logger.warning(
+                        f"[Facebook] post_image_mode=FROM_POST but no URL found in first_comment for campaign '{campaign.get('name')}' — posting without image."
+                    )
+                    return None, "image.jpg"
+                data = await fetch_random_post_photo(
+                    source_url, cookie=account.get("cookie"), proxy=account.get("proxy")
+                )
+                return data, "image.jpg"
+
+            if mode == "AI_GENERATED":
+                prompt = campaign.get("post_image_prompt")
+                if not prompt:
+                    logger.warning(
+                        f"[Facebook] post_image_mode=AI_GENERATED but post_image_prompt is empty for campaign '{campaign.get('name')}' — posting without image."
+                    )
+                    return None, "image.jpg"
+                owner = await self.db.users.find_one({"_id": campaign.get("owner_id")})
+                user_api_key = (owner or {}).get("openai_api_key")
+                if not user_api_key and not settings.OPENAI_API_KEY:
+                    logger.warning(
+                        f"[Facebook] post_image_mode=AI_GENERATED but no OpenAI API key configured (owner or server-wide) for campaign '{campaign.get('name')}' — posting without image."
+                    )
+                    return None, "image.jpg"
+                data = await generate_ai_image(prompt, api_key=user_api_key)
+                return data, "image.png"
+
+            return None, "image.jpg"
+        except Exception as e:
+            logger.warning(f"[Facebook] Could not resolve post image (mode={mode}) for campaign '{campaign.get('name')}': {e}")
+            return None, "image.jpg"
+
     async def _do_facebook_publish(self, campaign: dict):
         db = self.db
         campaign_id = campaign["_id"]
@@ -1093,25 +1168,17 @@ class Worker:
 
         # Structured template fields
         message = spin_spintax(template["content"])
-        raw_image_url = template.get("image_url") or None
-        image_url = None
-        image_data = None
-        image_filename = "image.jpg"
-        if raw_image_url:
-            if raw_image_url.startswith("/api/media/"):
-                filename = raw_image_url.split("/api/media/", 1)[1]
-                local_path = f"/app/static/uploads/{filename}"
-                try:
-                    with open(local_path, "rb") as fh:
-                        image_data = fh.read()
-                    image_filename = filename
-                except OSError:
-                    image_url = raw_image_url  # fallback to URL if file missing
-            else:
-                image_url = raw_image_url
+        image_url, image_data, image_filename = resolve_stored_image_reference(template.get("image_url"))
         first_comment_raw = template.get("first_comment") or None
         first_comment = spin_spintax(first_comment_raw) if first_comment_raw else None
         comment_delay_minutes = int(template.get("comment_delay_minutes") or 0)
+
+        # No manually-uploaded image on this post → resolve one dynamically per the
+        # campaign's post_image_mode (FROM_POST / AI_GENERATED), if configured.
+        if not image_url and not image_data:
+            dyn_image_data, dyn_image_filename = await self._resolve_post_image(campaign, account, first_comment_raw)
+            if dyn_image_data:
+                image_data, image_filename = dyn_image_data, dyn_image_filename
 
         # Calculate next_run_at before publishing so we update it regardless of success/failure
         schedule_mode = campaign.get("schedule_mode")
@@ -1164,7 +1231,7 @@ class Worker:
                     comment_status = "PENDING"
                     logger.info(f"[Facebook] Post {post_id} published. Comment scheduled at {fb_comment_at.isoformat()} UTC")
                 else:
-                    # Post comment immediately
+                    # Post comment immediately (plain text — the image, if any, is on the post itself)
                     try:
                         await post_comment_facebook(
                             page_access_token=account["access_token"],
@@ -1193,6 +1260,14 @@ class Worker:
                 }}
             )
             logger.info(f"[Facebook] Published post for campaign '{campaign.get('name')}'. post_id={post_id}")
+
+            # Only mark the template as published once it's actually live on Facebook —
+            # marking it on failure too would make the UI show "✓ Đã đăng" for a post
+            # that was never posted.
+            await db.comment_templates.update_one(
+                {"_id": template["_id"]},
+                {"$set": {"published_at": now}}
+            )
         except SocialAuthError as e:
             await db.jobs.update_one(
                 {"_id": job_oid},
@@ -1210,12 +1285,9 @@ class Worker:
             )
             logger.error(f"[Facebook] Publish error for campaign '{campaign.get('name')}': {e}")
 
-        # Mark this template as published so it won't be re-published
-        await db.comment_templates.update_one(
-            {"_id": template["_id"]},
-            {"$set": {"published_at": now}}
-        )
-        # Schedule next publish slot (only if more unpublished templates remain)
+        # Schedule next publish slot (only if more unpublished templates remain).
+        # If the publish above failed, the template is still unpublished, so this
+        # naturally retries the same post on the next scheduled run.
         remaining = await db.comment_templates.count_documents({
             "campaign_id": campaign_id, "status": "ACTIVE", "published_at": None
         })

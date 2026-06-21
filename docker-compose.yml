@@ -46,6 +46,7 @@ services:
       - MONGODB_URL=mongodb://mongodb:27017
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_NAME=social_campaign_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - ./backend:/app
     depends_on:

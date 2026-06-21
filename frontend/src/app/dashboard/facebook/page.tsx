@@ -130,7 +130,7 @@ export default function FacebookPage() {
       )}
 
       {/* Tab bar */}
-      <div className="flex gap-2 border-b border-gray-200 pb-0">
+      <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-0">
         {TABS.map((t) => (
           <button
             key={t.id}

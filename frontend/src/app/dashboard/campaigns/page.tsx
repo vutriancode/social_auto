@@ -147,6 +147,8 @@ export default function Campaigns() {
   const [fbAccountId, setFbAccountId] = useState("");
   const [fbAccounts, setFbAccounts] = useState([]);
   const [fbAccountName, setFbAccountName] = useState("");
+  const [fbPostImageMode, setFbPostImageMode] = useState("UPLOAD");
+  const [fbPostImagePrompt, setFbPostImagePrompt] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [bulkUrls, setBulkUrls] = useState("");
   const [bulkTemplates, setBulkTemplates] = useState("");
@@ -334,6 +336,8 @@ export default function Campaigns() {
           schedule_interval_minutes: isFb && fbScheduleMode === "interval" ? fbIntervalMinutes : null,
           schedule_fixed_times: isFb && fbScheduleMode === "fixed_times" ? fbFixedTimesList : null,
           facebook_account_id: isFb ? fbAccountId : null,
+          post_image_mode: isFb ? fbPostImageMode : "UPLOAD",
+          post_image_prompt: isFb && fbPostImageMode === "AI_GENERATED" ? (fbPostImagePrompt.trim() || null) : null,
         })
       });
       showToast("Tạo chiến dịch thành công!");
@@ -348,6 +352,8 @@ export default function Campaigns() {
       setFbIntervalMinutes(30);
       setFbFixedTimes("08:00,12:00,18:00");
       setFbAccountId("");
+      setFbPostImageMode("UPLOAD");
+      setFbPostImagePrompt("");
       setShowCreateModal(false);
       loadCampaigns();
       setSelectedCampaign(res);
@@ -628,11 +634,25 @@ export default function Campaigns() {
     }
   };
 
+  const updateCampaignImageSettings = async (payload) => {
+    try {
+      await apiFetch(`/api/campaigns/${selectedCampaign.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      showToast("Cập nhật cấu hình ảnh comment thành công!");
+      const updated = await apiFetch(`/api/campaigns/${selectedCampaign.id}`);
+      setSelectedCampaign(updated);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    }
+  };
+
   return (
     <div className="h-full grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] gap-6 items-start pb-8 animate-slide-in">
       
       {/* Toast notifications handler */}
-      <div className="fixed top-6 right-6 z-50 space-y-3">
+      <div className="fixed top-4 left-4 right-4 sm:left-auto sm:top-6 sm:right-6 z-50 space-y-3">
         {toasts.map((t) => (
           <div 
             key={t.id} 
@@ -779,7 +799,7 @@ export default function Campaigns() {
             </div>
 
             {/* Campaign Metrics */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {selectedCampaign.platform === "Facebook" ? (() => {
                 const publishedCount = campaignTemplates.filter(t => t.published_at).length;
                 const totalCount = campaignTemplates.length;
@@ -1180,6 +1200,50 @@ export default function Campaigns() {
                 </div>
               )}
 
+            {selectedCampaign.platform === "Facebook" && (
+              <div className="bg-white border border-gray-200 p-5 rounded-md text-xs font-bold text-gray-600 space-y-3 shadow-none">
+                <h4 className="text-xs font-extrabold uppercase tracking-widest text-gray-500 border-b pb-2">Ảnh bài viết (khi bài chưa có ảnh riêng)</h4>
+                <div>
+                  <label className="block mb-1.5 text-[10px] font-extrabold text-gray-500 uppercase tracking-wide">Chế độ lấy ảnh</label>
+                  <select
+                    value={selectedCampaign.post_image_mode || "UPLOAD"}
+                    onChange={(e) => updateCampaignImageSettings({ post_image_mode: e.target.value })}
+                    className="w-full h-10 bg-gray-55 border border-gray-200 rounded px-3 text-xs font-bold text-gray-900 focus:bg-white focus:outline-none cursor-pointer"
+                  >
+                    <option value="UPLOAD">Tải ảnh lên riêng cho từng bài (như hiện tại)</option>
+                    <option value="FROM_POST">Lấy ngẫu nhiên ảnh từ link trong nội dung comment</option>
+                    <option value="AI_GENERATED">AI tự sinh ảnh theo prompt</option>
+                  </select>
+                </div>
+
+                {(!selectedCampaign.post_image_mode || selectedCampaign.post_image_mode === "UPLOAD") && (
+                  <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
+                    Dùng ảnh tải lên riêng cho từng bài ở mục "Danh sách bài đăng" bên dưới (nút 📷 Tải ảnh lên trên mỗi bài).
+                  </p>
+                )}
+
+                {selectedCampaign.post_image_mode === "FROM_POST" && (
+                  <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
+                    Với các bài chưa tự tải ảnh riêng: nếu nội dung &quot;Comment đầu tiên&quot; của bài đó có chứa 1 link (Facebook hoặc trang bất kỳ, ví dụ link bài báo), hệ thống sẽ mở link đó và tự lấy ngẫu nhiên 1 ảnh để đính kèm vào BÀI VIẾT (không phải comment). Nếu link là Facebook, cần cookie Facebook ở tài khoản (mục Tài khoản mạng xã hội) để xem được ảnh. Nếu không có link, bài đăng không kèm ảnh.
+                  </p>
+                )}
+
+                {selectedCampaign.post_image_mode === "AI_GENERATED" && (
+                  <div>
+                    <textarea
+                      key={selectedCampaign.id + "-pimg-prompt"}
+                      defaultValue={selectedCampaign.post_image_prompt || ""}
+                      placeholder="Ví dụ: ảnh sản phẩm mỹ phẩm phong cách minimal, ánh sáng tự nhiên"
+                      rows={3}
+                      onBlur={(e) => updateCampaignImageSettings({ post_image_prompt: e.target.value.trim() || null })}
+                      className="w-full bg-gray-55 border border-gray-200 rounded px-3 py-2 text-xs font-semibold text-gray-900 focus:bg-white focus:outline-none resize-none"
+                    />
+                    <span className="text-[10px] text-gray-400 font-medium mt-1 block">Với các bài chưa tự tải ảnh riêng, AI sẽ sinh 1 ảnh mới cho bài viết dựa trên prompt này.</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Split Section: Imports */}
             <div className={`grid grid-cols-1 gap-8 ${selectedCampaign.platform !== "Facebook" ? "md:grid-cols-2" : ""}`}>
 
@@ -1401,7 +1465,7 @@ export default function Campaigns() {
                                 </div>
                                 <button onClick={() => deleteFbTemplate(tpl.id)} className="text-[10px] font-bold text-gray-400 hover:text-red-500 transition-colors cursor-pointer">Xóa</button>
                               </div>
-                              <div className={`grid gap-3 ${tpl.image_url ? "grid-cols-[1fr_130px]" : "grid-cols-1"}`}>
+                              <div className={`grid gap-3 ${tpl.image_url ? "grid-cols-1 sm:grid-cols-[1fr_130px]" : "grid-cols-1"}`}>
                                 <p className="text-xs text-gray-600 whitespace-pre-wrap break-words leading-relaxed">{tpl.content}</p>
                                 {tpl.image_url && <img src={tpl.image_url} alt="" className="w-full h-20 object-cover rounded-lg border border-gray-200" onError={e => (e.currentTarget.style.display="none")} />}
                               </div>
@@ -1423,7 +1487,7 @@ export default function Campaigns() {
                               <button onClick={() => deleteFbTemplate(tpl.id)} className="text-[10px] font-bold text-gray-400 hover:text-red-500 transition-colors cursor-pointer">✕ Xóa</button>
                             </div>
 
-                            <div className="grid grid-cols-[1fr_150px] gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-[1fr_150px] gap-3">
                               <textarea
                                 key={`content-${tpl.id}`}
                                 defaultValue={tpl.content}
@@ -1457,7 +1521,7 @@ export default function Campaigns() {
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-[1fr_110px] gap-3 items-start pt-2.5 border-t border-gray-100">
+                            <div className="grid grid-cols-1 sm:grid-cols-[1fr_110px] gap-3 items-start pt-2.5 border-t border-gray-100">
                               <div>
                                 <label className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wide block mb-1.5">💬 Comment đính kèm</label>
                                 <textarea
@@ -1497,7 +1561,7 @@ export default function Campaigns() {
                             <button onClick={() => { setShowAddFbPost(false); setNewFbPost(emptyFbPost); }} className="text-[10px] font-bold text-gray-400 hover:text-red-500 cursor-pointer">✕ Hủy</button>
                           </div>
 
-                          <div className="grid grid-cols-[1fr_150px] gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-[1fr_150px] gap-3">
                             <textarea
                               value={newFbPost.content}
                               onChange={(e) => setNewFbPost({ ...newFbPost, content: e.target.value })}
@@ -1530,7 +1594,7 @@ export default function Campaigns() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-[1fr_110px] gap-3 items-start pt-2.5 border-t border-blue-200">
+                          <div className="grid grid-cols-1 sm:grid-cols-[1fr_110px] gap-3 items-start pt-2.5 border-t border-blue-200">
                             <div>
                               <label className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wide block mb-1.5">💬 Comment đính kèm</label>
                               <textarea
@@ -1675,8 +1739,8 @@ export default function Campaigns() {
 
       {/* CREATE MODAL */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white border border-gray-200 rounded-lg max-w-md w-full p-8 space-y-5 shadow-none animate-slide-up">
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 z-50 animate-fade-in overflow-y-auto">
+          <div className="bg-white border border-gray-200 rounded-lg max-w-md w-full p-5 sm:p-8 space-y-5 shadow-none animate-slide-up">
             <div className="flex justify-between items-center border-b border-gray-200 pb-3">
               <h3 className="text-base font-extrabold text-gray-900 uppercase tracking-tight">Tạo chiến dịch mới</h3>
               <button 
@@ -1794,6 +1858,45 @@ export default function Campaigns() {
                         className="w-full h-11 bg-white border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
                       />
                       <span className="text-[10px] text-gray-400 font-medium mt-1 block">Nhập giờ cách nhau bằng dấu phẩy. Giờ theo UTC.</span>
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-indigo-200">
+                    <label className="block mb-1.5 ml-0.5 text-xs font-bold text-gray-700">Ảnh bài viết (khi bài chưa có ảnh riêng)</label>
+                    <select
+                      value={fbPostImageMode}
+                      onChange={(e) => setFbPostImageMode(e.target.value)}
+                      className="w-full h-11 bg-white border border-gray-200 rounded-md px-3 text-xs font-bold text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+                    >
+                      <option value="UPLOAD">Tải ảnh lên riêng cho từng bài (như hiện tại)</option>
+                      <option value="FROM_POST">Lấy ngẫu nhiên ảnh từ link trong nội dung comment</option>
+                      <option value="AI_GENERATED">AI tự sinh ảnh theo prompt</option>
+                    </select>
+                  </div>
+
+                  {fbPostImageMode === "UPLOAD" && (
+                    <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
+                      Sau khi tạo chiến dịch, tải ảnh riêng cho từng bài ở mục "Danh sách bài đăng" (nút 📷 Tải ảnh lên trên mỗi bài).
+                    </p>
+                  )}
+
+                  {fbPostImageMode === "FROM_POST" && (
+                    <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
+                      Với các bài chưa tự tải ảnh riêng: nếu nội dung &quot;Comment đầu tiên&quot; của bài đó có chứa 1 link (Facebook hoặc trang bất kỳ, ví dụ link bài báo), hệ thống sẽ mở link đó và tự lấy ngẫu nhiên 1 ảnh để đính kèm vào BÀI VIẾT (không phải comment). Nếu link là Facebook, cần cookie Facebook ở tài khoản (mục Tài khoản mạng xã hội) để xem được ảnh. Nếu không có link, bài đăng không kèm ảnh.
+                    </p>
+                  )}
+
+                  {fbPostImageMode === "AI_GENERATED" && (
+                    <div>
+                      <label className="block mb-1.5 ml-0.5 text-xs font-bold text-gray-700">Prompt sinh ảnh chung cho chiến dịch</label>
+                      <textarea
+                        value={fbPostImagePrompt}
+                        onChange={(e) => setFbPostImagePrompt(e.target.value)}
+                        placeholder="Ví dụ: ảnh sản phẩm mỹ phẩm phong cách minimal, ánh sáng tự nhiên"
+                        rows={3}
+                        className="w-full bg-white border border-gray-200 rounded-md px-4 py-2 text-xs font-semibold text-gray-900 focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                      />
+                      <span className="text-[10px] text-gray-400 font-medium mt-1 block">Với các bài chưa tự tải ảnh riêng, AI sẽ sinh 1 ảnh mới cho bài viết dựa trên prompt này.</span>
                     </div>
                   )}
                 </div>

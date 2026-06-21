@@ -150,6 +150,8 @@ async def create_campaign(
         "schedule_interval_minutes": campaign_in.schedule_interval_minutes,
         "schedule_fixed_times": campaign_in.schedule_fixed_times or [],
         "facebook_account_id": campaign_in.facebook_account_id,
+        "post_image_mode": campaign_in.post_image_mode or "UPLOAD",
+        "post_image_prompt": campaign_in.post_image_prompt,
         "comment_template_cursor": 0,
         "next_run_at": None,
         "last_repeat_run_at": None,
@@ -266,6 +268,10 @@ async def update_campaign(
         update_data["schedule_fixed_times"] = campaign_in.schedule_fixed_times
     if campaign_in.facebook_account_id is not None:
         update_data["facebook_account_id"] = campaign_in.facebook_account_id
+    if "post_image_mode" in sent_fields:
+        update_data["post_image_mode"] = campaign_in.post_image_mode
+    if "post_image_prompt" in sent_fields:
+        update_data["post_image_prompt"] = campaign_in.post_image_prompt
     if "next_run_at" in sent_fields and "next_run_at" not in update_data:
         update_data["next_run_at"] = campaign_in.next_run_at
 

@@ -178,7 +178,7 @@ export default function URLsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
       {/* Toasts */}
-      <div className="fixed top-6 right-6 z-50 space-y-3">
+      <div className="fixed top-4 left-4 right-4 sm:left-auto sm:top-6 sm:right-6 z-50 space-y-3">
         {toasts.map((t) => (
           <div
             key={t.id}
@@ -194,11 +194,11 @@ export default function URLsPage() {
       </div>
 
       <div className="max-w-6xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900">🔗 Quản Lý Target URLs</h1>
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-8">
+          <h1 className="text-2xl sm:text-4xl font-bold text-gray-900">🔗 Quản Lý Target URLs</h1>
           <button
             onClick={() => (showForm ? resetForm() : setShowForm(true))}
-            className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-blue-700"
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-blue-700 self-start sm:self-auto"
           >
             {showForm ? "❌ Hủy" : "➕ URL Mới"}
           </button>

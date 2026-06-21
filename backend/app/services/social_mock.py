@@ -1814,16 +1814,35 @@ async def post_comment_facebook(
     page_access_token: str,
     post_id: str,
     comment_text: str,
+    image_data: Optional[bytes] = None,
+    image_filename: str = "image.jpg",
     proxy: Optional[str] = None,
 ) -> dict:
-    """Post a comment on a Facebook post using a Page Access Token."""
+    """Post a comment on a Facebook post using a Page Access Token.
+    If image_data is provided, it's uploaded as an unpublished photo first and
+    attached to the comment via attachment_id.
+    """
     GRAPH = "https://graph.facebook.com/v19.0"
     proxies = {"all://": proxy} if proxy else None
     async with httpx.AsyncClient(proxies=proxies, timeout=30.0) as client:
-        r = await client.post(
-            f"{GRAPH}/{post_id}/comments",
-            data={"message": comment_text, "access_token": page_access_token},
-        )
+        attachment_id = None
+        if image_data:
+            photo_r = await client.post(
+                f"{GRAPH}/me/photos",
+                data={"published": "false", "access_token": page_access_token},
+                files={"source": (image_filename, image_data, "image/jpeg")},
+            )
+            photo_data = photo_r.json()
+            if "error" in photo_data:
+                err = photo_data["error"]
+                msg = err.get("message", "Facebook API error")
+                raise RuntimeError(f"Facebook API ({err.get('code')}): lỗi upload ảnh cho comment: {msg}")
+            attachment_id = photo_data.get("id")
+
+        comment_payload = {"message": comment_text, "access_token": page_access_token}
+        if attachment_id:
+            comment_payload["attachment_id"] = attachment_id
+        r = await client.post(f"{GRAPH}/{post_id}/comments", data=comment_payload)
     data = r.json()
     if "error" in data:
         err = data["error"]
@@ -1833,6 +1852,139 @@ async def post_comment_facebook(
             raise SocialAuthError(f"Facebook token hết hạn hoặc không hợp lệ: {msg}")
         raise RuntimeError(f"Facebook API ({code}): {msg}")
     return {"success": True, "comment_id": data.get("id", ""), "real_api": True}
+
+
+async def fetch_random_post_photo(post_url: str, cookie: Optional[str] = None, proxy: Optional[str] = None) -> bytes:
+    """Opens a post/article URL with Playwright and downloads one random photo found on the page.
+    For facebook.com URLs, injects the given Facebook session cookie (Facebook gates most post
+    content behind a login wall otherwise) and only keeps Facebook's own CDN images. For any other
+    site (e.g. a news article link), no cookie is used and any reasonably large image counts,
+    skipping obvious icon/logo/avatar assets."""
+    from playwright.async_api import async_playwright
+    from urllib.parse import urlparse
+
+    post_url = post_url.strip()
+    if not post_url.startswith("http"):
+        post_url = f"https://{post_url}"
+
+    is_facebook = "facebook.com" in urlparse(post_url).netloc.lower()
+
+    launch_kwargs = {
+        "headless": True,
+        "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    }
+    if proxy:
+        launch_kwargs["proxy"] = {"server": proxy}
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(**launch_kwargs)
+        try:
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 1200},
+                locale="en-US",
+            )
+            if cookie and is_facebook:
+                cookies_dict = parse_cookie_to_dict(cookie)
+                playwright_cookies = [
+                    {
+                        "name": name,
+                        "value": value,
+                        "domain": ".facebook.com",
+                        "path": "/",
+                        "secure": True,
+                        "sameSite": "None",
+                    }
+                    for name, value in cookies_dict.items()
+                ]
+                await context.add_cookies(playwright_cookies)
+
+            page = await context.new_page()
+            await page.goto(post_url, wait_until="domcontentloaded", timeout=45000)
+            await page.wait_for_timeout(4000)
+
+            if is_facebook:
+                srcs = await page.eval_on_selector_all(
+                    "img",
+                    "els => els.filter(e => e.naturalWidth >= 200 && e.naturalHeight >= 200).map(e => e.src)",
+                )
+                photo_urls = list(dict.fromkeys(s for s in srcs if s and "scontent" in s))
+            else:
+                # Generic article page: scope to the actual article body first (common CMS
+                # selectors), so we don't pick up the site logo, nav icons, ads, related-articles
+                # thumbnails or sidebar/comment-section images.
+                srcs = await page.evaluate(
+                    """() => {
+                        const CONTENT_SELECTORS = [
+                            'article', '[itemprop="articleBody"]',
+                            '.article-content', '.article-body', '.article__content',
+                            '.post-content', '.entry-content', '.detail-content',
+                            '.content-detail', '.fck_detail', '.maincontent',
+                            '#main-detail-body', '#article-content', 'main',
+                        ];
+                        const EXCLUDE = 'header, footer, nav, aside, .sidebar, .related, ' +
+                            '.related-news, .box-related, .comment, .comments, .ads, ' +
+                            '.advertisement, .social-share, .share, .breadcrumb, .menu, ' +
+                            '.navigation, .logo, .header, .footer';
+
+                        let scope = document;
+                        for (const sel of CONTENT_SELECTORS) {
+                            const el = document.querySelector(sel);
+                            if (el && el.querySelectorAll('img').length > 0) {
+                                scope = el;
+                                break;
+                            }
+                        }
+
+                        return Array.from(scope.querySelectorAll('img'))
+                            .filter(e => e.naturalWidth >= 200 && e.naturalHeight >= 200)
+                            .filter(e => !e.closest(EXCLUDE))
+                            .map(e => e.src);
+                    }"""
+                )
+                blocked = ("icon", "logo", "avatar", "sprite", "spacer", "pixel", "blank.")
+                photo_urls = list(dict.fromkeys(
+                    s for s in srcs if s and s.startswith("http") and not any(b in s.lower() for b in blocked)
+                ))
+        finally:
+            await browser.close()
+
+    if not photo_urls:
+        raise RuntimeError(
+            "Không tìm thấy ảnh nào trong bài viết nguồn. Bài viết có thể yêu cầu đăng nhập hoặc không công khai."
+        )
+
+    chosen = random.choice(photo_urls)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        img_r = await client.get(chosen)
+        img_r.raise_for_status()
+        return img_r.content
+
+
+async def generate_ai_image(prompt: str, api_key: Optional[str] = None) -> bytes:
+    """Generates an image from a text prompt using OpenAI's image generation API.
+    api_key should be the caller's own OpenAI key (configured in their account settings);
+    falls back to the server-wide OPENAI_API_KEY env var if not provided."""
+    import base64
+    from app.core.config import settings
+
+    api_key = api_key or settings.OPENAI_API_KEY
+    if not api_key:
+        raise RuntimeError("Chưa cấu hình OpenAI API Key. Vui lòng thêm API Key trong phần Cài đặt tài khoản.")
+
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        r = await client.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": "gpt-image-1", "prompt": prompt, "size": "1024x1024", "n": 1},
+        )
+    data = r.json()
+    if "error" in data:
+        raise RuntimeError(f"Lỗi sinh ảnh AI: {data['error'].get('message', 'unknown error')}")
+    b64 = (data.get("data") or [{}])[0].get("b64_json")
+    if not b64:
+        raise RuntimeError("Không nhận được ảnh từ AI.")
+    return base64.b64decode(b64)
 
 
 async def publish_post_facebook(

@@ -26,6 +26,7 @@ export default function DashboardLayout({ children }) {
   const [token, setToken] = useState(null);
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     const storedToken = sessionStorage.getItem("campaign_token");
@@ -39,6 +40,11 @@ export default function DashboardLayout({ children }) {
       setLoading(false);
     }
   }, [router]);
+
+  // Close the mobile drawer whenever the route changes (e.g. after tapping a nav link)
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
 
   const handleLogout = () => {
     sessionStorage.removeItem("campaign_token");
@@ -67,20 +73,64 @@ export default function DashboardLayout({ children }) {
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-[#FAFBFD] text-slate-800">
 
-      {/* Flat Sidebar Shell */}
-      <aside className="w-full md:w-72 bg-gray-50 border border-gray-200 p-6 flex flex-col justify-between shrink-0 md:h-[calc(100vh-32px)] m-4 rounded-lg shadow-none">
+      {/* Mobile top bar (hamburger trigger) */}
+      <div className="md:hidden flex items-center justify-between bg-gray-50 border border-gray-200 m-4 mb-0 p-4 rounded-lg shadow-none">
+        <div className="flex items-center space-x-2.5">
+          <div className="w-9 h-9 bg-[#3B82F6] rounded-lg flex items-center justify-center shrink-0">
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+            </svg>
+          </div>
+          <h2 className="font-extrabold text-slate-900 text-sm leading-none tracking-tight">Auto Social</h2>
+        </div>
+        <button
+          onClick={() => setMobileMenuOpen(true)}
+          aria-label="Mở menu điều hướng"
+          className="p-2 rounded-md text-slate-500 hover:bg-slate-100 cursor-pointer"
+        >
+          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Mobile drawer backdrop */}
+      {mobileMenuOpen && (
+        <div
+          onClick={() => setMobileMenuOpen(false)}
+          className="md:hidden fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-40 animate-fade-in"
+        />
+      )}
+
+      {/* Flat Sidebar Shell — slides in as a drawer on mobile, static on md+ */}
+      <aside
+        className={`fixed md:static inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-gray-50 border border-gray-200 p-6 flex flex-col justify-between shrink-0 h-[calc(100vh-32px)] m-4 rounded-lg shadow-none transition-transform duration-200 ${
+          mobileMenuOpen ? "translate-x-0" : "-translate-x-[120%]"
+        } md:translate-x-0`}
+      >
         <div className="space-y-10">
 
           {/* Logo */}
-          <div className="flex items-center space-x-3 pl-1">
-            <div className="w-10 h-10 bg-[#3B82F6] rounded-xl flex items-center justify-center">
-              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+          <div className="flex items-center justify-between pl-1">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-[#3B82F6] rounded-xl flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="font-extrabold text-slate-900 text-base leading-none tracking-tight">Auto Social</h2>
+              </div>
+            </div>
+            <button
+              onClick={() => setMobileMenuOpen(false)}
+              aria-label="Đóng menu"
+              className="md:hidden p-1.5 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
-            </div>
-            <div>
-              <h2 className="font-extrabold text-slate-900 text-base leading-none tracking-tight">Auto Social</h2>
-            </div>
+            </button>
           </div>
 
           {/* Navigation Links */}

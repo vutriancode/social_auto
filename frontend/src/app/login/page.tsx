@@ -86,7 +86,7 @@ export default function Login() {
       </div>
 
       {/* Toast notifications */}
-      <div className="fixed top-6 right-6 z-50 space-y-3">
+      <div className="fixed top-4 left-4 right-4 sm:left-auto sm:top-6 sm:right-6 z-50 space-y-3">
         {toasts.map((t) => (
           <div
             key={t.id}

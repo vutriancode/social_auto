@@ -333,12 +333,14 @@ const getCookieStatus = (platform, value) => {
 
   try {
     const cookies = parseCookieMap(value);
-    const required = platform === "Threads" ? ["sessionid"] : ["auth_token", "ct0"];
+    const required = platform === "Threads" ? ["sessionid"] : platform === "Facebook" ? ["c_user", "xs"] : ["auth_token", "ct0"];
     const missing = required.filter((key) => !cookies[key]);
-    
+
     // Danh sách cookies khuyến khích
-    const recommended = platform === "Threads" 
+    const recommended = platform === "Threads"
       ? ["sessionid", "ds_user_id", "csrftoken", "mid", "ig_did"]
+      : platform === "Facebook"
+      ? ["c_user", "xs", "datr", "sb", "fr"]
       : ["auth_token", "ct0", "twid", "mid", "datr"];
     const hasRecommended = recommended.filter(key => cookies[key]);
 
@@ -1166,7 +1168,7 @@ export default function Accounts() {
           username,
           display_name: displayName,
           avatar_url: newPlatform === "Facebook" ? (fbResolved?.avatar_url || null) : null,
-          cookie: (newPlatform === "Threads" && newAuthMode === "api") || newPlatform === "Facebook" ? null : (newCookie.trim() || null),
+          cookie: (newPlatform === "Threads" && newAuthMode === "api") ? null : (newCookie.trim() || null),
           access_token: (newPlatform === "Threads" && newAuthMode === "api") || newPlatform === "Facebook" ? newAccessToken.trim() : null,
           threads_user_id: (newPlatform === "Threads" && newAuthMode === "api") ? newThreadsUserId.trim() : null,
           proxy: newProxy.trim() || null,
@@ -1266,6 +1268,7 @@ export default function Accounts() {
       };
       if (editingAccount?.platform === "Facebook") {
         if (editAccessToken.trim()) payload.access_token = editAccessToken.trim();
+        if (editCookie.trim()) payload.cookie = editCookie.trim();
       } else {
         if (editCookie.trim()) payload.cookie = editCookie.trim();
       }
@@ -1484,7 +1487,7 @@ export default function Accounts() {
     <div className="space-y-8 pb-8 animate-slide-in">
       
       {/* Toast notifications handler */}
-      <div className="fixed top-6 right-6 z-50 space-y-3">
+      <div className="fixed top-4 left-4 right-4 sm:left-auto sm:top-6 sm:right-6 z-50 space-y-3">
         {toasts.map((t) => (
           <div 
             key={t.id} 
@@ -1897,8 +1900,8 @@ export default function Accounts() {
 
       {/* ADD MODAL */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className={`bg-white border border-gray-200 rounded-lg w-full p-8 space-y-5 shadow-none animate-slide-up transition-all ${
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 z-50 animate-fade-in overflow-y-auto">
+          <div className={`bg-white border border-gray-200 rounded-lg w-full p-5 sm:p-8 space-y-5 shadow-none animate-slide-up transition-all ${
             addMode === "file" ? "max-w-2xl" : "max-w-md"
           }`}>
             <div className="flex justify-between items-center border-b border-gray-200 pb-3">
@@ -1915,7 +1918,7 @@ export default function Accounts() {
               <button
                 type="button"
                 onClick={() => setAddMode("single")}
-                className={`h-10 rounded text-[11px] font-extrabold transition-all cursor-pointer ${
+                className={`min-h-10 rounded px-1 py-1.5 text-[11px] font-extrabold transition-all cursor-pointer leading-tight ${
                   addMode === "single" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-900"
                 }`}
               >
@@ -1924,7 +1927,7 @@ export default function Accounts() {
               <button
                 type="button"
                 onClick={() => setAddMode("file")}
-                className={`h-10 rounded text-[11px] font-extrabold transition-all cursor-pointer ${
+                className={`min-h-10 rounded px-1 py-1.5 text-[11px] font-extrabold transition-all cursor-pointer leading-tight ${
                   addMode === "file" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-900"
                 }`}
               >
@@ -1933,7 +1936,7 @@ export default function Accounts() {
               <button
                 type="button"
                 onClick={() => setAddMode("bulk")}
-                className={`h-10 rounded text-[11px] font-extrabold transition-all cursor-pointer ${
+                className={`min-h-10 rounded px-1 py-1.5 text-[11px] font-extrabold transition-all cursor-pointer leading-tight ${
                   addMode === "bulk" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-900"
                 }`}
               >
@@ -2017,6 +2020,20 @@ export default function Accounts() {
                       </div>
                     </div>
                   )}
+
+                  <div className="pt-2 border-t border-gray-200">
+                    <label className="block mb-1.5 ml-0.5">Cookie Facebook cá nhân (Tùy chọn)</label>
+                    <textarea
+                      value={newCookie}
+                      onChange={(e) => setNewCookie(e.target.value)}
+                      placeholder="Dán cookie đăng nhập Facebook tại đây (ví dụ: c_user=...; xs=...)"
+                      rows={3}
+                      className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                    />
+                    <span className="text-[10px] text-gray-400 font-medium mt-1 block">
+                      Chỉ cần khi dùng chế độ ảnh "Lấy ngẫu nhiên ảnh từ link trong nội dung comment" — Facebook yêu cầu đăng nhập mới xem được ảnh trong bài viết khác, nên cần cookie để hệ thống mở được bài viết nguồn đó. Không cần nếu bạn dùng chế độ tải ảnh lên hoặc AI sinh ảnh.
+                    </span>
+                  </div>
                 </>
               ) : newPlatform === "Threads" && newAuthMode === "api" ? (
                 <>
@@ -2199,7 +2216,7 @@ export default function Accounts() {
                           </button>
                         </div>
                         
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                           <div>
                             <label className="block text-[9px] text-gray-400 uppercase tracking-wide font-extrabold mb-1">Nền tảng</label>
                             <select
@@ -2426,8 +2443,8 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
 
       {/* EDIT MODAL */}
       {showEditModal && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white border border-gray-200 rounded-lg max-w-md w-full p-8 space-y-5 shadow-none animate-slide-up">
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 z-50 animate-fade-in overflow-y-auto">
+          <div className="bg-white border border-gray-200 rounded-lg max-w-md w-full p-5 sm:p-8 space-y-5 shadow-none animate-slide-up">
             <div className="flex justify-between items-center border-b border-gray-200 pb-3">
               <h3 className="text-base font-extrabold text-gray-900 uppercase tracking-tight">Chỉnh sửa tài khoản</h3>
               <button 
@@ -2463,17 +2480,32 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
               </div>
 
               {editingAccount?.platform === "Facebook" ? (
-                <div>
-                  <label className="block mb-1.5 ml-0.5">Page Access Token mới (Tùy chọn)</label>
-                  <textarea
-                    value={editAccessToken}
-                    onChange={(e) => setEditAccessToken(e.target.value)}
-                    placeholder="Nhập Page Access Token mới để thay thế token hiện tại..."
-                    rows={3}
-                    className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
-                  />
-                  <span className="text-[10px] text-gray-400 font-medium mt-1 block">Token phải có quyền <strong>pages_manage_engagement</strong>. Để trống nếu không muốn thay đổi.</span>
-                </div>
+                <>
+                  <div>
+                    <label className="block mb-1.5 ml-0.5">Page Access Token mới (Tùy chọn)</label>
+                    <textarea
+                      value={editAccessToken}
+                      onChange={(e) => setEditAccessToken(e.target.value)}
+                      placeholder="Nhập Page Access Token mới để thay thế token hiện tại..."
+                      rows={3}
+                      className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                    />
+                    <span className="text-[10px] text-gray-400 font-medium mt-1 block">Token phải có quyền <strong>pages_manage_engagement</strong>. Để trống nếu không muốn thay đổi.</span>
+                  </div>
+                  <div>
+                    <label className="block mb-1.5 ml-0.5">Cookie Facebook cá nhân mới (Tùy chọn)</label>
+                    <textarea
+                      value={editCookie}
+                      onChange={(e) => setEditCookie(e.target.value)}
+                      placeholder="Dán cookie đăng nhập Facebook tại đây (ví dụ: c_user=...; xs=...)"
+                      rows={3}
+                      className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                    />
+                    <span className="text-[10px] text-gray-400 font-medium mt-1 block">
+                      Chỉ cần khi dùng chế độ ảnh "Lấy ngẫu nhiên ảnh từ link trong nội dung comment". Để trống nếu không muốn thay đổi.
+                    </span>
+                  </div>
+                </>
               ) : (
                 <div>
                   <div className="flex justify-between items-center mb-1.5">
@@ -2540,8 +2572,8 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
 
       {/* COOKIE PREVIEW & CONVERTER MODAL */}
       {showCookiePreview && previewCookieData && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white border border-gray-200 rounded-lg max-w-3xl w-full p-8 space-y-5 shadow-none animate-slide-up max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 z-50 animate-fade-in overflow-y-auto">
+          <div className="bg-white border border-gray-200 rounded-lg max-w-3xl w-full p-5 sm:p-8 space-y-5 shadow-none animate-slide-up max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-gray-200 pb-3">
               <h3 className="text-base font-extrabold text-gray-900 uppercase tracking-tight">Chi tiết Cookies ({previewCookieData.status.count} items)</h3>
               <button 
@@ -2596,7 +2628,7 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                 <button
                   type="button"
                   onClick={() => setPreviewFormat("header")}
-                  className={`h-10 rounded text-[11px] font-extrabold transition-all cursor-pointer ${
+                  className={`min-h-10 rounded px-1 py-1.5 text-[11px] font-extrabold transition-all cursor-pointer leading-tight ${
                     previewFormat === "header" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-900"
                   }`}
                 >
@@ -2605,7 +2637,7 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                 <button
                   type="button"
                   onClick={() => setPreviewFormat("json")}
-                  className={`h-10 rounded text-[11px] font-extrabold transition-all cursor-pointer ${
+                  className={`min-h-10 rounded px-1 py-1.5 text-[11px] font-extrabold transition-all cursor-pointer leading-tight ${
                     previewFormat === "json" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-900"
                   }`}
                 >
@@ -2614,7 +2646,7 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                 <button
                   type="button"
                   onClick={() => setPreviewFormat("netscape")}
-                  className={`h-10 rounded text-[11px] font-extrabold transition-all cursor-pointer ${
+                  className={`min-h-10 rounded px-1 py-1.5 text-[11px] font-extrabold transition-all cursor-pointer leading-tight ${
                     previewFormat === "netscape" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-900"
                   }`}
                 >

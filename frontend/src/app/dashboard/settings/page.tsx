@@ -10,6 +10,7 @@ interface UserInfo {
   id: string;
   username: string;
   created_at: string;
+  has_openai_api_key?: boolean;
 }
 
 export default function SettingsPage() {
@@ -22,6 +23,9 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
+
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [savingApiKey, setSavingApiKey] = useState(false);
 
   const showToast = (message: string, type: "success" | "error" = "success") => {
     const id = Date.now();
@@ -106,6 +110,63 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!openaiApiKey.trim()) {
+      showToast("Vui lòng nhập OpenAI API Key", "error");
+      return;
+    }
+    setSavingApiKey(true);
+    try {
+      const token = sessionStorage.getItem("campaign_token");
+      const res = await fetch(`${API_BASE}/api/auth/settings`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ openai_api_key: openaiApiKey.trim() })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Không thể lưu API Key");
+      }
+      showToast("✅ Đã lưu OpenAI API Key!");
+      setOpenaiApiKey("");
+      fetchUserInfo();
+    } catch (err: any) {
+      showToast(err.message || "Lỗi khi lưu API Key", "error");
+    } finally {
+      setSavingApiKey(false);
+    }
+  };
+
+  const handleClearApiKey = async () => {
+    setSavingApiKey(true);
+    try {
+      const token = sessionStorage.getItem("campaign_token");
+      const res = await fetch(`${API_BASE}/api/auth/settings`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ openai_api_key: null })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Không thể xóa API Key");
+      }
+      showToast("✅ Đã xóa OpenAI API Key.");
+      setOpenaiApiKey("");
+      fetchUserInfo();
+    } catch (err: any) {
+      showToast(err.message || "Lỗi khi xóa API Key", "error");
+    } finally {
+      setSavingApiKey(false);
+    }
+  };
+
   const handleLogout = () => {
     sessionStorage.removeItem("campaign_token");
     sessionStorage.removeItem("campaign_user");
@@ -124,7 +185,7 @@ export default function SettingsPage() {
   return (
     <div className="space-y-8 pb-8 animate-slide-up">
       {/* Toasts */}
-      <div className="fixed top-6 right-6 z-50 space-y-3">
+      <div className="fixed top-4 left-4 right-4 sm:left-auto sm:top-6 sm:right-6 z-50 space-y-3">
         {toasts.map((t) => (
           <div
             key={t.id}
@@ -224,6 +285,56 @@ export default function SettingsPage() {
           >
             {changingPassword ? "Đang xử lý..." : "Đổi mật khẩu"}
           </button>
+        </form>
+      </div>
+
+      {/* OpenAI API Key Card */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg shadow-none p-6">
+        <h2 className="text-xs font-extrabold text-gray-900 uppercase tracking-wider mb-2">OpenAI API Key</h2>
+        <p className="text-gray-500 text-xs font-semibold mb-5">
+          Dùng để chiến dịch Facebook tự sinh ảnh AI cho comment (chế độ &quot;AI tự sinh ảnh theo prompt&quot;).
+        </p>
+
+        <div className="mb-4 flex items-center gap-2">
+          <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">Trạng thái:</span>
+          {userInfo?.has_openai_api_key ? (
+            <span className="text-emerald-600 text-xs font-bold">Đã cấu hình</span>
+          ) : (
+            <span className="text-amber-600 text-xs font-bold">Chưa cấu hình</span>
+          )}
+        </div>
+
+        <form onSubmit={handleSaveApiKey} className="space-y-4">
+          <div>
+            <label className="block text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">API Key</label>
+            <input
+              type="password"
+              value={openaiApiKey}
+              onChange={(e) => setOpenaiApiKey(e.target.value)}
+              placeholder="sk-..."
+              className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+              disabled={savingApiKey}
+            />
+          </div>
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={savingApiKey}
+              className="flex-1 h-11 bg-[#3B82F6] hover:bg-blue-600 text-white font-bold rounded-md text-xs transition-all duration-200 disabled:opacity-50 cursor-pointer"
+            >
+              {savingApiKey ? "Đang lưu..." : "Lưu API Key"}
+            </button>
+            {userInfo?.has_openai_api_key && (
+              <button
+                type="button"
+                onClick={handleClearApiKey}
+                disabled={savingApiKey}
+                className="h-11 px-4 bg-white border border-red-200 text-red-600 hover:bg-red-50 font-bold rounded-md text-xs transition-all duration-200 disabled:opacity-50 cursor-pointer"
+              >
+                Xóa
+              </button>
+            )}
+          </div>
         </form>
       </div>
 
