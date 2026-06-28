@@ -9,7 +9,8 @@ import redis.asyncio as redis
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
-from app.core.config import settings, ACCOUNT_COMMENT_COOLDOWN_SECONDS
+from app.core.config import settings, ACCOUNT_COMMENT_COOLDOWN_MIN_SECONDS, ACCOUNT_COMMENT_COOLDOWN_MAX_SECONDS
+from app.core.job_scheduling import X_MIN_GAP_SECONDS, X_MAX_GAP_SECONDS
 from app.core.time_utils import parse_to_naive_utc, compute_next_fixed_time
 from app.core.job_scheduling import build_account_cooldown_tracker, reserve_account_schedule
 from app.services.social_mock import (
@@ -506,7 +507,17 @@ class Worker:
         if campaign["platform"] == "Threads":
             last_activity = parse_to_naive_utc(account.get("last_activity"))
             if last_activity:
-                cooldown_until = last_activity + timedelta(seconds=ACCOUNT_COMMENT_COOLDOWN_SECONDS)
+                cooldown_secs = random.randint(ACCOUNT_COMMENT_COOLDOWN_MIN_SECONDS, ACCOUNT_COMMENT_COOLDOWN_MAX_SECONDS)
+                cooldown_until = last_activity + timedelta(seconds=cooldown_secs)
+                if datetime.utcnow() < cooldown_until:
+                    await self.postpone_for_account_cooldown(job_id_str, job, account, cooldown_until)
+                    await self.check_campaign_completion(campaign_id)
+                    return
+        elif campaign["platform"] == "X":
+            last_activity = parse_to_naive_utc(account.get("last_activity"))
+            if last_activity:
+                gap_secs = random.randint(X_MIN_GAP_SECONDS, X_MAX_GAP_SECONDS)
+                cooldown_until = last_activity + timedelta(seconds=gap_secs)
                 if datetime.utcnow() < cooldown_until:
                     await self.postpone_for_account_cooldown(job_id_str, job, account, cooldown_until)
                     await self.check_campaign_completion(campaign_id)
@@ -711,7 +722,7 @@ class Worker:
         # jobs aren't queued immediately and then reactively rescheduled by the
         # worker for hitting the inter-comment cooldown.
         now = datetime.utcnow()
-        cooldown_tracker = build_account_cooldown_tracker(valid_accounts, active_jobs, now)
+        cooldown_tracker = build_account_cooldown_tracker(valid_accounts, active_jobs, now, platform=platform)
 
         # Concurrent Polling with Semaphore & Account Rotation (Option 2)
         MAX_CONCURRENT_MONITOR_SCANS = 10
@@ -1004,7 +1015,7 @@ class Worker:
         # jobs aren't queued immediately and then reactively rescheduled by the
         # worker for hitting the inter-comment cooldown.
         now = datetime.utcnow()
-        cooldown_tracker = build_account_cooldown_tracker(valid_accounts, active_jobs_global, now)
+        cooldown_tracker = build_account_cooldown_tracker(valid_accounts, active_jobs_global, now, platform=platform)
 
         jobs_enqueued = 0
         template_cursor = int(campaign.get("comment_template_cursor") or 0) % len(templates)

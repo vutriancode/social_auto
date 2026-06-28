@@ -27,20 +27,24 @@ const extractAccountUsername = (value) => {
   return firstToken ? firstToken.replace(/^@/, "").replace(/\.$/, "") : "";
 };
 
+const decodeHtmlEntities = (str: string) =>
+  str.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+
 const extractAccountCookie = (value) => {
-  const lines = value.split(/\r?\n/);
+  const decoded = decodeHtmlEntities(value);
+  const lines = decoded.split(/\r?\n/);
   const cookieLines = lines.filter(line => line.includes("\t") || line.trim().startsWith("#"));
   if (cookieLines.length > 0) {
     return cookieLines.join("\n").trim();
   }
 
-  const jsonStart = value.search(/\[\s*\{/);
-  if (jsonStart >= 0) return value.slice(jsonStart).trim();
-  const jsonObjectStart = value.search(/\{\s*"/);
-  if (jsonObjectStart >= 0) return value.slice(jsonObjectStart).trim();
+  const jsonStart = decoded.search(/\[\s*\{/);
+  if (jsonStart >= 0) return decoded.slice(jsonStart).trim();
+  const jsonObjectStart = decoded.search(/\{\s*"/);
+  if (jsonObjectStart >= 0) return decoded.slice(jsonObjectStart).trim();
 
-  const cookieStart = value.search(/(?:auth_token|ct0|sessionid|session_id|csrf_token|csrftoken|ds_user_id)=/i);
-  return cookieStart >= 0 ? value.slice(cookieStart).trim() : "";
+  const cookieStart = decoded.search(/(?:auth_token|ct0|sessionid|session_id|csrf_token|csrftoken|ds_user_id)=/i);
+  return cookieStart >= 0 ? decoded.slice(cookieStart).trim() : "";
 };
 
 
@@ -426,6 +430,13 @@ const splitBulkAccountBlocks = (value) => {
     .filter(Boolean);
 
   if (blankLineBlocks.length > 1) return blankLineBlocks;
+
+  const singleLines = normalized.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
+  if (singleLines.length > 1) {
+    const COOKIE_KEY_RE = /(?:auth_token|ct0|sessionid|session_id|csrf_token|csrftoken|ds_user_id)=/i;
+    const cookieLineCount = singleLines.filter((line: string) => COOKIE_KEY_RE.test(line)).length;
+    if (cookieLineCount > 1) return singleLines;
+  }
 
   return normalized
     .split(/\r?\n(?=(?:https?:\/\/|@)[A-Za-z0-9_./:-]+)/)
@@ -1271,6 +1282,10 @@ export default function Accounts() {
         if (editCookie.trim()) payload.cookie = editCookie.trim();
       } else {
         if (editCookie.trim()) payload.cookie = editCookie.trim();
+      }
+      if ((payload.cookie || payload.access_token) && editingAccount?.status === "ERROR") {
+        payload.status = "ACTIVE";
+        payload.health_score = 100;
       }
 
       await apiFetch(`/api/accounts/${editingAccount.id}`, {
