@@ -978,8 +978,8 @@ async def start_campaign(
         )
         return {"message": "Campaign started successfully", "jobs_enqueued": 0}
 
-    # If campaign was previously COMPLETED/FAILED/STOPPED, reset everything for a fresh run
-    if campaign["status"] in ["COMPLETED", "FAILED", "STOPPED"]:
+    # If campaign was previously COMPLETED/FAILED/STOPPED/PAUSED, reset everything for a fresh run
+    if campaign["status"] in ["COMPLETED", "FAILED", "STOPPED", "PAUSED"]:
         # Reset all non-SUCCESS URLs back to PENDING for re-processing
         await db.target_urls.update_many(
             {"campaign_id": campaign_oid, "status": {"$in": ["FAILED", "SKIPPED", "PROCESSING"]}},
@@ -1000,7 +1000,10 @@ async def start_campaign(
             # Check if there are paused/pending jobs to resume
             existing_jobs = await db.jobs.find({"campaign_id": campaign_oid, "status": "PENDING"}).to_list(length=1000)
             if not existing_jobs:
-                raise HTTPException(status_code=400, detail="No PENDING URLs or jobs found to execute. All URLs may have already been processed successfully.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Tất cả bài viết trong chiến dịch này đã được comment thành công, không còn bài nào cần chạy lại. Nếu muốn comment lại từ đầu, hãy dùng 'Nhân bản' để tạo bản sao mới, hoặc thêm bài viết mới."
+                )
     else:
         if not get_monitor_page_urls(campaign):
             raise HTTPException(status_code=400, detail="Please add at least one profile/page link to monitor before starting this campaign.")

@@ -766,6 +766,11 @@ export default function Accounts() {
   const [refreshingId, setRefreshingId] = useState(null);
   const [bulkRefreshing, setBulkRefreshing] = useState(false);
   const [bulkRefreshProgress, setBulkRefreshProgress] = useState("");
+  const [editProxy, setEditProxy] = useState("");
+  const [showBulkProxyModal, setShowBulkProxyModal] = useState(false);
+  const [bulkProxyValue, setBulkProxyValue] = useState("");
+  const [bulkProxyPlatform, setBulkProxyPlatform] = useState("ALL");
+  const [bulkProxying, setBulkProxying] = useState(false);
   const [showLoginScriptModal, setShowLoginScriptModal] = useState(false);
   const [loginScriptContent, setLoginScriptContent] = useState("");
   const [loginScriptProfileUrl, setLoginScriptProfileUrl] = useState("");
@@ -1263,6 +1268,7 @@ export default function Accounts() {
       setEditAccessToken(detail.platform === "Facebook" ? (detail.access_token || "") : "");
       setEditDailyLimit(detail.daily_limit || 50);
       setEditHourlyLimit(detail.hourly_limit || 5);
+      setEditProxy(detail.proxy || "");
       setShowEditModal(true);
     } catch (err) {
       showToast(err.message || "Không tải được thông tin tài khoản.", "error");
@@ -1275,7 +1281,8 @@ export default function Accounts() {
       const payload: any = {
         display_name: editDisplayName,
         daily_limit: Number(editDailyLimit),
-        hourly_limit: Number(editHourlyLimit)
+        hourly_limit: Number(editHourlyLimit),
+        proxy: editProxy.trim() || null,
       };
       if (editingAccount?.platform === "Facebook") {
         if (editAccessToken.trim()) payload.access_token = editAccessToken.trim();
@@ -1397,6 +1404,48 @@ export default function Accounts() {
     setBulkRefreshing(false);
     setBulkRefreshProgress("");
     showToast("Hoan tat refresh hang loat: " + successCount + " thanh cong, " + failCount + " that bai.", "success");
+    loadAccounts();
+  };
+
+  const generateSessionId = () => Math.random().toString(36).slice(2, 10);
+
+  const resolveProxy = (template: string) => {
+    if (!template.trim()) return null;
+    if (!template.includes("{session}")) return template.trim();
+    return template.replace("{session}", generateSessionId());
+  };
+
+  const handleBulkSetProxy = async () => {
+    const targetAccounts = accounts.filter(acc =>
+      bulkProxyPlatform === "ALL" ? (acc.platform === "X" || acc.platform === "Threads") : acc.platform === bulkProxyPlatform
+    );
+    if (targetAccounts.length === 0) {
+      showToast("Không tìm thấy tài khoản nào phù hợp.", "error");
+      return;
+    }
+    const proxyLines = bulkProxyValue.split("\n").map(l => l.trim()).filter(Boolean);
+    setBulkProxying(true);
+    let ok = 0;
+    let fail = 0;
+    for (let i = 0; i < targetAccounts.length; i++) {
+      const acc = targetAccounts[i];
+      // Nếu không có proxy nào → xóa. Nếu có nhiều → lấy theo index vòng tròn.
+      const template = proxyLines.length === 0 ? "" : proxyLines[i % proxyLines.length];
+      const proxy = resolveProxy(template);
+      try {
+        await apiFetch(`/api/accounts/${acc.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ proxy })
+        });
+        ok++;
+      } catch {
+        fail++;
+      }
+    }
+    setBulkProxying(false);
+    showToast(`Đã cập nhật proxy cho ${ok} tài khoản${fail ? `, lỗi ${fail}` : ""}.`, fail ? "error" : "success");
+    setShowBulkProxyModal(false);
+    setBulkProxyValue("");
     loadAccounts();
   };
 
@@ -1550,6 +1599,14 @@ export default function Accounts() {
             className="h-10 bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-600 font-extrabold px-4 rounded-md text-xs transition-all duration-200 hover:scale-[1.02] disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
           >
             Bulk Refresh All
+          </button>
+
+          {/* Bulk Set Proxy Button */}
+          <button
+            onClick={() => setShowBulkProxyModal(true)}
+            className="h-10 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 font-extrabold px-4 rounded-md text-xs transition-all duration-200 hover:scale-[1.02] cursor-pointer flex items-center gap-1.5"
+          >
+            🌐 Set Proxy
           </button>
 
           {/* Add Account Button */}
@@ -1807,7 +1864,7 @@ export default function Accounts() {
                           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                           </svg>
-                          <span>{acc.platform === "Facebook" ? "Kiểm tra Token" : "Kiểm tra Cookie"}</span>
+                          <span>{acc.platform === "Facebook" || (acc.platform === "Threads" && acc.has_access_token) ? "Kiểm tra Token" : "Kiểm tra Cookie"}</span>
                         </>
                       )}
                     </button>
@@ -1857,7 +1914,7 @@ export default function Accounts() {
                               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                               </svg>
-                              <span>🔄 Refresh Cookie</span>
+                              <span>🔄 {acc.platform === "Threads" && acc.has_access_token ? "Refresh Token" : "Refresh Cookie"}</span>
                             </>
                           )}
                         </button>
@@ -2549,6 +2606,18 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                 </div>
               )}
 
+              <div>
+                <label className="block mb-1.5 ml-0.5">Proxy kết nối (Tùy chọn)</label>
+                <input
+                  type="text"
+                  value={editProxy}
+                  onChange={(e) => setEditProxy(e.target.value)}
+                  placeholder="http://user:pass@ip:port hoặc để trống để xóa proxy"
+                  className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
+                />
+                <span className="text-[10px] text-gray-400 font-medium mt-1 block">Để trống để xóa proxy hiện tại. Hỗ trợ HTTP/HTTPS.</span>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block mb-1.5 ml-0.5">Giới hạn theo giờ</label>
@@ -2581,6 +2650,133 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                 Lưu thay đổi
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* BULK SET PROXY MODAL */}
+      {showBulkProxyModal && (
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 z-50 animate-fade-in overflow-y-auto">
+          <div className="bg-white border border-gray-200 rounded-lg max-w-md w-full p-5 sm:p-8 space-y-5 shadow-none animate-slide-up">
+            <div className="flex justify-between items-center border-b border-gray-200 pb-3">
+              <h3 className="text-base font-extrabold text-gray-900 uppercase tracking-tight">🌐 Áp dụng Proxy hàng loạt</h3>
+              <button onClick={() => setShowBulkProxyModal(false)} className="text-gray-400 hover:text-gray-900 font-bold text-sm cursor-pointer">✕</button>
+            </div>
+            <div className="space-y-4 text-xs font-bold text-gray-600">
+              <div>
+                <label className="block mb-1.5 ml-0.5">Áp dụng cho nền tảng</label>
+                <div className="grid grid-cols-3 gap-2 bg-gray-100 border border-gray-200 rounded-md p-1">
+                  {["ALL", "X", "Threads"].map(p => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setBulkProxyPlatform(p)}
+                      className={`h-9 rounded text-[10px] font-extrabold transition-all cursor-pointer ${
+                        bulkProxyPlatform === p ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-900"
+                      }`}
+                    >
+                      {p === "ALL" ? "X + Threads" : p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="block ml-0.5">Danh sách Proxy</label>
+                  <span className="text-[10px] text-gray-400 font-medium">
+                    {bulkProxyValue.split("\n").filter(l => l.trim()).length} proxy
+                  </span>
+                </div>
+                <textarea
+                  value={bulkProxyValue}
+                  onChange={(e) => setBulkProxyValue(e.target.value)}
+                  placeholder={"Mỗi dòng 1 proxy. Ví dụ:\nhttp://user:pass@1.2.3.4:8080\nhttp://user:pass@5.6.7.8:8080\nhttp://user-{session}:pass@gate.provider.com:7000"}
+                  rows={4}
+                  className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
+                />
+                <span className="text-[10px] text-gray-400 font-medium mt-1 block">
+                  Để trống để xóa proxy. Nhiều proxy → chia lần lượt cho từng account. Dùng <code className="bg-gray-100 px-1 rounded">{"{session}"}</code> để sinh IP riêng.
+                </span>
+              </div>
+
+              {/* Template shortcut */}
+              <div>
+                <p className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wide mb-1.5">Mẫu nhanh (nhấn để thêm)</p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { label: "Sticky Session", value: "http://user-{session}:pass@gate.provider.com:7000" },
+                    { label: "IP cố định", value: "http://user:pass@1.2.3.4:8080" },
+                  ].map(t => (
+                    <button
+                      key={t.label}
+                      type="button"
+                      onClick={() => setBulkProxyValue(prev => prev ? prev.trimEnd() + "\n" + t.value : t.value)}
+                      className="text-[10px] font-bold px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded cursor-pointer text-gray-700 transition-all"
+                    >
+                      + {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live preview */}
+              {(() => {
+                const targetAccounts = accounts.filter(a =>
+                  bulkProxyPlatform === "ALL" ? (a.platform === "X" || a.platform === "Threads") : a.platform === bulkProxyPlatform
+                );
+                const proxyLines = bulkProxyValue.split("\n").map(l => l.trim()).filter(Boolean);
+                if (proxyLines.length === 0 || targetAccounts.length === 0) return null;
+                const isMulti = proxyLines.length > 1;
+                const hasSession = proxyLines.some(p => p.includes("{session}"));
+                if (!isMulti && !hasSession) return null;
+                return (
+                  <div className="bg-blue-50 border border-blue-200 rounded-md px-3.5 py-3 space-y-1.5">
+                    <p className="text-[10px] font-extrabold text-blue-700 uppercase tracking-wide">
+                      Preview phân phối ({Math.min(targetAccounts.length, 4)} / {targetAccounts.length} account):
+                    </p>
+                    {targetAccounts.slice(0, 4).map((acc, i) => {
+                      const template = proxyLines[i % proxyLines.length];
+                      const resolved = template.includes("{session}")
+                        ? template.replace("{session}", Math.random().toString(36).slice(2, 8))
+                        : template;
+                      return (
+                        <div key={acc.id} className="font-mono text-[10px] text-blue-600 bg-white/70 px-2 py-1 rounded border border-blue-100 flex gap-1.5 min-w-0">
+                          <span className="shrink-0 font-extrabold text-blue-800">@{acc.username.slice(0, 10)}{acc.username.length > 10 ? "…" : ""}</span>
+                          <span className="truncate">→ {resolved}</span>
+                        </div>
+                      );
+                    })}
+                    {targetAccounts.length > 4 && (
+                      <p className="text-[10px] text-blue-500 font-semibold">... và {targetAccounts.length - 4} tài khoản khác</p>
+                    )}
+                    {isMulti && proxyLines.length < targetAccounts.length && (
+                      <p className="text-[10px] text-amber-600 font-semibold">⚠️ Ít proxy hơn account — proxy sẽ được lặp vòng.</p>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div className="bg-amber-50 border border-amber-200 rounded-md px-3.5 py-3 text-[11px] font-semibold text-amber-700">
+                ⚠️ Thao tác này sẽ ghi đè proxy của <strong>tất cả {accounts.filter(a => bulkProxyPlatform === "ALL" ? (a.platform === "X" || a.platform === "Threads") : a.platform === bulkProxyPlatform).length} tài khoản {bulkProxyPlatform === "ALL" ? "X và Threads" : bulkProxyPlatform}</strong> hiện tại.
+              </div>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkProxyModal(false)}
+                  className="flex-1 h-11 bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 font-extrabold rounded-md text-xs cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkSetProxy}
+                  disabled={bulkProxying}
+                  className="flex-1 h-11 bg-[#3B82F6] hover:bg-blue-600 text-white font-extrabold rounded-md text-xs transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {bulkProxying ? "Đang áp dụng..." : "Áp dụng"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

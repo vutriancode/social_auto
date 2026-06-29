@@ -1756,7 +1756,8 @@ async def check_account_connection(
             if access_token.lower().startswith("mock"):
                 return True, f"Threads access token (MOCK) hop le."
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
+                proxies = {"all://": proxy} if proxy else None
+                async with httpx.AsyncClient(proxies=proxies, timeout=15.0) as client:
                     response = await client.get(
                         "https://graph.threads.net/v1.0/me",
                         params={"fields": "id,username", "access_token": access_token},
@@ -2191,15 +2192,16 @@ async def fetch_real_latest_post(platform: str, page_url: str, cookie_str: Optio
                     if platform == "X":
                         # Find links containing "/status/"
                         links = await page.locator("a[href*='/status/']").all()
+                        username_lower = username.lower()
                         for link in links:
                             href = await link.get_attribute("href")
-                            if href and f"/{username}/status/" in href:
+                            if href and f"/{username_lower}/status/" in href.lower():
                                 full_url = href if href.startswith("http") else f"https://x.com{href}"
                                 if re.search(r"/status/\d+", full_url):
                                     full_url = full_url.split("?")[0]
                                     logger.info(f"[X] Found latest post: {full_url}")
                                     return full_url
-                        
+
                         raise RuntimeError(f"Không tìm thấy bài viết nào trên trang X của @{username}.")
 
                     else:
