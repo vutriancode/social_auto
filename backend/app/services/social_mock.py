@@ -158,6 +158,50 @@ def parse_cookie_to_dict(cookie_str: str) -> dict:
     return cookies_dict
 
 
+def playwright_proxy_settings(proxy: Optional[str]) -> Optional[dict]:
+    """Convert a proxy string into Playwright's proxy config dict.
+
+    Playwright/Chromium does NOT read credentials embedded in the server URL — it
+    requires `username`/`password` as separate fields. So for an authenticated
+    proxy like ``http://user:pass@host:port`` we split the credentials out and pass
+    them separately; a proxy without auth is passed through as just the server.
+    Returns None when no proxy is configured.
+    """
+    if not proxy:
+        return None
+    raw = proxy.strip()
+    if not raw:
+        return None
+
+    from urllib.parse import unquote
+
+    if "://" in raw:
+        scheme, rest = raw.split("://", 1)
+        scheme = (scheme or "http").lower()
+    else:
+        scheme, rest = "http", raw
+
+    creds = None
+    hostport = rest
+    if "@" in rest:
+        # rsplit so a password containing '@' still leaves host:port intact.
+        creds, hostport = rest.rsplit("@", 1)
+
+    if not hostport:
+        # Unexpected format — fall back to the raw value so behaviour is unchanged.
+        return {"server": raw}
+
+    settings = {"server": f"{scheme}://{hostport}"}
+    if creds is not None:
+        if ":" in creds:
+            user, pwd = creds.split(":", 1)
+        else:
+            user, pwd = creds, ""
+        settings["username"] = unquote(user)
+        settings["password"] = unquote(pwd)
+    return settings
+
+
 def shortcode_to_id(shortcode: str) -> int:
     """
     Decodes an Instagram/Threads shortcode into its numeric media ID.
@@ -429,7 +473,14 @@ async def post_to_x_playwright(
                 disabled = await candidate.get_attribute("disabled")
                 if aria_disabled == "true" or disabled is not None:
                     continue
-                await candidate.click(timeout=5000)
+                try:
+                    await candidate.click(timeout=5000)
+                except Exception as click_err:
+                    # X often opens the reply composer as a modal whose backdrop mask
+                    # (<div data-testid="mask">) intercepts pointer events — force the click.
+                    if "intercepts pointer events" not in str(click_err) and "Timeout" not in str(click_err):
+                        raise
+                    await candidate.click(force=True, timeout=5000)
                 logger.info(f"Clicked X {description} candidate #{index + 1}")
                 return True
             except Exception as e:
@@ -446,17 +497,6 @@ async def post_to_x_playwright(
         except Exception as e:
             logger.debug(f"Could not capture X debug screenshot: {e}")
 
-    async def capture_state(page, name: str) -> str:
-        try:
-            debug_dir = tempfile.gettempdir()
-            screenshot_path = os.path.join(debug_dir, f"x_{name}_{int(asyncio.get_event_loop().time())}.png")
-            await page.screenshot(path=screenshot_path, full_page=True)
-            logger.info(f"X screenshot saved to {screenshot_path}")
-            return screenshot_path
-        except Exception as e:
-            logger.debug(f"Could not capture X screenshot: {e}")
-            return ""
-
     await _pre_request_jitter(2.0, 7.0)
     _profile = _pick_browser_profile()
     logger.info(f"Starting Playwright browser automation for X comment (UA: {_profile['user_agent'][:60]}...)")
@@ -465,8 +505,9 @@ async def post_to_x_playwright(
             "headless": True,
             "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
         }
-        if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
+        proxy_settings = playwright_proxy_settings(proxy)
+        if proxy_settings:
+            launch_kwargs["proxy"] = proxy_settings
 
         browser = await p.chromium.launch(**launch_kwargs)
         try:
@@ -525,6 +566,19 @@ async def post_to_x_playwright(
                 "div[role='button']:has-text('Reply'), button:has-text('Reply')"
             )
 
+            # Wait for the reply control to actually render before interacting. X is slow
+            # to hydrate (especially over a proxy), and querying too early is the main
+            # cause of intermittent "no reply button found" failures.
+            try:
+                await page.wait_for_selector("[data-testid='reply']", state="visible", timeout=20000)
+            except Exception:
+                # Nudge lazy rendering with a small scroll, then wait a bit more.
+                try:
+                    await page.evaluate("window.scrollBy(0, 300)")
+                except Exception:
+                    pass
+                await page.wait_for_timeout(3000)
+
             reply_clicked = False
             if await article.count() > 0:
                 reply_clicked = await click_first_visible(article.locator(reply_button_selectors), "reply button in article")
@@ -551,7 +605,15 @@ async def post_to_x_playwright(
             dialog_visible = await dialog.count() > 0 and await dialog.is_visible()
             scope = dialog if dialog_visible else page
             editor = scope.locator(composer_selector).first
-            await editor.click()
+            # Give the click a bounded timeout and a force fallback: without a timeout
+            # a mask overlay intercepting the click makes Playwright retry for its full
+            # 30s default, and every reply attempt would hang instead of posting.
+            try:
+                await editor.click(timeout=5000)
+            except Exception as click_err:
+                if "intercepts pointer events" not in str(click_err) and "Timeout" not in str(click_err):
+                    raise
+                await editor.click(force=True, timeout=5000)
             await page.keyboard.insert_text(comment_content)
             await page.wait_for_timeout(1500)
 
@@ -663,8 +725,6 @@ async def post_to_x_playwright(
                     verification_msg = "Reply composer detached after submit."
                     break
 
-            screenshot_path = await capture_state(page, "post_submit")
-
             # If editor never cleared, treat as success with a warning — X sometimes keeps
             # the editor open briefly after posting (especially on slow connections).
             if not verified:
@@ -682,7 +742,6 @@ async def post_to_x_playwright(
                 "verified": verified,
                 "verification_msg": verification_msg,
                 "toast_messages": toast_messages,
-                "screenshot_path": screenshot_path,
             }
         finally:
             await browser.close()
@@ -976,8 +1035,9 @@ async def post_to_threads_playwright(
             "headless": True,
             "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
         }
-        if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
+        proxy_settings = playwright_proxy_settings(proxy)
+        if proxy_settings:
+            launch_kwargs["proxy"] = proxy_settings
 
         browser = await p.chromium.launch(**launch_kwargs)
         try:
@@ -1337,15 +1397,6 @@ async def post_to_threads_playwright(
                             verification_msg = "Retried submit action; waiting for composer to clear."
                     except Exception as retry_submit_err:
                         logger.warning(f"Could not retry Threads submit action: {retry_submit_err}")
-            # Capture post-submit screenshot for debugging
-            try:
-                debug_dir = tempfile.gettempdir()
-                screenshot_path = os.path.join(debug_dir, f"threads_post_submit_{int(asyncio.get_event_loop().time())}.png")
-                await page.screenshot(path=screenshot_path)
-                logger.info(f"Post-submit screenshot saved to {screenshot_path}")
-            except Exception:
-                pass
-
             # Wait a bit more for any async operations
             await page.wait_for_timeout(2000)
 
@@ -1600,8 +1651,9 @@ async def refresh_account_cookies(
             "headless": True,
             "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
         }
-        if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
+        proxy_settings = playwright_proxy_settings(proxy)
+        if proxy_settings:
+            launch_kwargs["proxy"] = proxy_settings
 
         browser = await p.chromium.launch(**launch_kwargs)
         _refresh_profile = _pick_browser_profile()
@@ -1938,8 +1990,9 @@ async def fetch_random_post_photo(post_url: str, cookie: Optional[str] = None, p
         "headless": True,
         "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     }
-    if proxy:
-        launch_kwargs["proxy"] = {"server": proxy}
+    proxy_settings = playwright_proxy_settings(proxy)
+    if proxy_settings:
+        launch_kwargs["proxy"] = proxy_settings
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(**launch_kwargs)
@@ -2124,8 +2177,9 @@ async def fetch_real_latest_post(platform: str, page_url: str, cookie_str: Optio
             "headless": True,
             "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
         }
-        if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
+        proxy_settings = playwright_proxy_settings(proxy)
+        if proxy_settings:
+            launch_kwargs["proxy"] = proxy_settings
 
         browser = await p.chromium.launch(**launch_kwargs)
         _fetch_profile = _pick_browser_profile()
@@ -2190,17 +2244,51 @@ async def fetch_real_latest_post(platform: str, page_url: str, cookie_str: Optio
                         raise RuntimeError(f"Bị chuyển hướng khỏi trang cá nhân của @{username} (URL hiện tại: {page.url}). Cookie có thể đã hết hạn.")
 
                     if platform == "X":
+                        # Wait for the timeline to actually render tweets instead of
+                        # relying on the fixed sleep above — X is JS-heavy and slow
+                        # over a proxy, so the fixed wait often fires before any tweet
+                        # exists in the DOM.
+                        try:
+                            await page.wait_for_selector("a[href*='/status/']", timeout=15000)
+                        except Exception:
+                            pass
+                        # Nudge lazy-loading of the timeline.
+                        try:
+                            await page.evaluate("window.scrollBy(0, 1000)")
+                            await page.wait_for_timeout(2500)
+                        except Exception:
+                            pass
+
                         # Find links containing "/status/"
                         links = await page.locator("a[href*='/status/']").all()
                         username_lower = username.lower()
+                        seen_hrefs = []
                         for link in links:
                             href = await link.get_attribute("href")
-                            if href and f"/{username_lower}/status/" in href.lower():
+                            if not href:
+                                continue
+                            seen_hrefs.append(href)
+                            if f"/{username_lower}/status/" in href.lower():
                                 full_url = href if href.startswith("http") else f"https://x.com{href}"
                                 if re.search(r"/status/\d+", full_url):
                                     full_url = full_url.split("?")[0]
                                     logger.info(f"[X] Found latest post: {full_url}")
                                     return full_url
+
+                        # Diagnostics so we can tell "timeline not loaded / empty account"
+                        # (0 status links) apart from "only reposts of others" (links exist
+                        # but none authored by the profile owner).
+                        logger.warning(
+                            f"[X] No own post found for @{username}. "
+                            f"/status/ links on page: {len(seen_hrefs)}; samples: {seen_hrefs[:5]}"
+                        )
+                        try:
+                            import tempfile
+                            shot_path = os.path.join(tempfile.gettempdir(), f"x_monitor_{username_lower}.png")
+                            await page.screenshot(path=shot_path, full_page=True)
+                            logger.warning(f"[X] Saved profile screenshot to {shot_path} (title={await page.title()})")
+                        except Exception:
+                            pass
 
                         raise RuntimeError(f"Không tìm thấy bài viết nào trên trang X của @{username}.")
 

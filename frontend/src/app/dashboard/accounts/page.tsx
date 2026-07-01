@@ -771,6 +771,10 @@ export default function Accounts() {
   const [bulkProxyValue, setBulkProxyValue] = useState("");
   const [bulkProxyPlatform, setBulkProxyPlatform] = useState("ALL");
   const [bulkProxying, setBulkProxying] = useState(false);
+  // Set Proxy applies across ALL accounts (every page), so we load the full list
+  // separately from the paginated grid.
+  const [bulkProxyAllAccounts, setBulkProxyAllAccounts] = useState<any[]>([]);
+  const [bulkProxyLoadingAll, setBulkProxyLoadingAll] = useState(false);
   const [showLoginScriptModal, setShowLoginScriptModal] = useState(false);
   const [loginScriptContent, setLoginScriptContent] = useState("");
   const [loginScriptProfileUrl, setLoginScriptProfileUrl] = useState("");
@@ -1111,6 +1115,27 @@ export default function Accounts() {
     loadAccounts();
   }, [currentPage, limit]);
 
+  // Load every account (all pages) whenever the Set Proxy modal opens, so the
+  // bulk action and its preview cover the whole account list — not just the page
+  // currently visible in the grid.
+  useEffect(() => {
+    if (!showBulkProxyModal) return;
+    let cancelled = false;
+    setBulkProxyLoadingAll(true);
+    (async () => {
+      try {
+        const data = await apiFetch(`/api/accounts?page=1&limit=100000`);
+        const list = Array.isArray(data) ? data : (data.items || []);
+        if (!cancelled) setBulkProxyAllAccounts(list);
+      } catch {
+        if (!cancelled) setBulkProxyAllAccounts([]);
+      } finally {
+        if (!cancelled) setBulkProxyLoadingAll(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showBulkProxyModal]);
+
   const resolveToken = async (token: string) => {
     if (!token.trim()) return;
     setFbResolving(true);
@@ -1415,35 +1440,79 @@ export default function Accounts() {
     return template.replace("{session}", generateSessionId());
   };
 
+  const bulkProxyPlatformMatch = (acc) =>
+    bulkProxyPlatform === "ALL" ? (acc.platform === "X" || acc.platform === "Threads") : acc.platform === bulkProxyPlatform;
+
   const handleBulkSetProxy = async () => {
-    const targetAccounts = accounts.filter(acc =>
-      bulkProxyPlatform === "ALL" ? (acc.platform === "X" || acc.platform === "Threads") : acc.platform === bulkProxyPlatform
-    );
-    if (targetAccounts.length === 0) {
-      showToast("Không tìm thấy tài khoản nào phù hợp.", "error");
+    const proxyLines = bulkProxyValue.split("\n").map(l => l.trim()).filter(Boolean);
+
+    // Fetch the full account list (all pages) fresh so the action applies globally
+    // and reflects up-to-date has_proxy values.
+    setBulkProxying(true);
+    let allAccounts: any[];
+    try {
+      const data = await apiFetch(`/api/accounts?page=1&limit=100000`);
+      allAccounts = Array.isArray(data) ? data : (data.items || []);
+    } catch {
+      setBulkProxying(false);
+      showToast("Không tải được danh sách tài khoản. Vui lòng thử lại.", "error");
       return;
     }
-    const proxyLines = bulkProxyValue.split("\n").map(l => l.trim()).filter(Boolean);
-    setBulkProxying(true);
-    let ok = 0;
-    let fail = 0;
-    for (let i = 0; i < targetAccounts.length; i++) {
-      const acc = targetAccounts[i];
-      // Nếu không có proxy nào → xóa. Nếu có nhiều → lấy theo index vòng tròn.
-      const template = proxyLines.length === 0 ? "" : proxyLines[i % proxyLines.length];
-      const proxy = resolveProxy(template);
+
+    // Ô trống → xóa proxy của tất cả tài khoản phù hợp (giữ tính năng xóa cũ).
+    if (proxyLines.length === 0) {
+      const all = allAccounts.filter(bulkProxyPlatformMatch);
+      if (all.length === 0) {
+        setBulkProxying(false);
+        showToast("Không tìm thấy tài khoản nào phù hợp.", "error");
+        return;
+      }
+      let ok = 0, fail = 0;
+      for (const acc of all) {
+        try {
+          await apiFetch(`/api/accounts/${acc.id}`, { method: "PATCH", body: JSON.stringify({ proxy: null }) });
+          ok++;
+        } catch {
+          fail++;
+        }
+      }
+      setBulkProxying(false);
+      showToast(`Đã xóa proxy của ${ok} tài khoản${fail ? `, lỗi ${fail}` : ""}.`, fail ? "error" : "success");
+      setShowBulkProxyModal(false);
+      setBulkProxyValue("");
+      loadAccounts();
+      return;
+    }
+
+    // Chỉ gán cho tài khoản CHƯA có proxy; bỏ qua tài khoản đã có proxy (giữ nguyên).
+    const targets = allAccounts.filter(acc => bulkProxyPlatformMatch(acc) && !acc.has_proxy);
+    if (targets.length === 0) {
+      setBulkProxying(false);
+      showToast("Tất cả tài khoản phù hợp đều đã có proxy — không cần gán thêm.", "success");
+      return;
+    }
+
+    // Gán lần lượt mỗi proxy cho 1 tài khoản chưa có proxy, KHÔNG lặp vòng.
+    // Hết proxy thì các tài khoản còn lại để trống.
+    let ok = 0, fail = 0;
+    const assignCount = Math.min(targets.length, proxyLines.length);
+    for (let i = 0; i < assignCount; i++) {
+      const proxy = resolveProxy(proxyLines[i]);
       try {
-        await apiFetch(`/api/accounts/${acc.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ proxy })
-        });
+        await apiFetch(`/api/accounts/${targets[i].id}`, { method: "PATCH", body: JSON.stringify({ proxy }) });
         ok++;
       } catch {
         fail++;
       }
     }
+    const leftover = targets.length - assignCount;
     setBulkProxying(false);
-    showToast(`Đã cập nhật proxy cho ${ok} tài khoản${fail ? `, lỗi ${fail}` : ""}.`, fail ? "error" : "success");
+    showToast(
+      `Đã gán proxy cho ${ok} tài khoản chưa có proxy` +
+      (leftover ? `, còn ${leftover} tài khoản chưa đủ proxy nên để trống` : "") +
+      (fail ? `, lỗi ${fail}` : "") + ".",
+      fail ? "error" : "success"
+    );
     setShowBulkProxyModal(false);
     setBulkProxyValue("");
     loadAccounts();
@@ -2200,10 +2269,10 @@ export default function Accounts() {
                   type="text"
                   value={newProxy}
                   onChange={(e) => setNewProxy(e.target.value)}
-                  placeholder="Ví dụ: http://user:pass@ip:port hoặc http://ip:port"
+                  placeholder="Ví dụ: ip:port:user:pass hoặc http://user:pass@ip:port"
                   className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
                 />
-                <span className="text-[10px] text-gray-400 font-medium mt-1 block">Hỗ trợ các định dạng proxy HTTP/HTTPS. Định dạng: http://[user:pass@]ip:port</span>
+                <span className="text-[10px] text-gray-400 font-medium mt-1 block">Nhận cả <code className="bg-gray-100 px-1 rounded">ip:port:user:pass</code> (dán thẳng từ nhà cung cấp) hoặc <code className="bg-gray-100 px-1 rounded">http://[user:pass@]ip:port</code> — hệ thống tự chuẩn hóa.</span>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -2348,7 +2417,7 @@ export default function Accounts() {
                   type="text"
                   value={newProxy}
                   onChange={(e) => setNewProxy(e.target.value)}
-                  placeholder="Ví dụ: http://user:pass@ip:port hoặc http://ip:port"
+                  placeholder="Ví dụ: ip:port:user:pass hoặc http://user:pass@ip:port"
                   className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all mb-4"
                 />
               </div>
@@ -2411,7 +2480,7 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                   type="text"
                   value={newProxy}
                   onChange={(e) => setNewProxy(e.target.value)}
-                  placeholder="Ví dụ: http://user:pass@ip:port hoặc http://ip:port"
+                  placeholder="Ví dụ: ip:port:user:pass hoặc http://user:pass@ip:port"
                   className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all mb-4"
                 />
               </div>
@@ -2612,7 +2681,7 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                   type="text"
                   value={editProxy}
                   onChange={(e) => setEditProxy(e.target.value)}
-                  placeholder="http://user:pass@ip:port hoặc để trống để xóa proxy"
+                  placeholder="ip:port:user:pass hoặc http://user:pass@ip:port (để trống để xóa proxy)"
                   className="w-full h-11 bg-gray-100 border border-gray-200 rounded-md px-4 text-xs font-semibold text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all"
                 />
                 <span className="text-[10px] text-gray-400 font-medium mt-1 block">Để trống để xóa proxy hiện tại. Hỗ trợ HTTP/HTTPS.</span>
@@ -2690,12 +2759,12 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                 <textarea
                   value={bulkProxyValue}
                   onChange={(e) => setBulkProxyValue(e.target.value)}
-                  placeholder={"Mỗi dòng 1 proxy. Ví dụ:\nhttp://user:pass@1.2.3.4:8080\nhttp://user:pass@5.6.7.8:8080\nhttp://user-{session}:pass@gate.provider.com:7000"}
-                  rows={4}
+                  placeholder={"Mỗi dòng 1 proxy. Dán thẳng định dạng nhà cung cấp:\n171.246.128.29:36500:oliver698:matkhau\nhoặc dạng URL:\nhttp://user:pass@1.2.3.4:8080\nhttp://user-{session}:pass@gate.provider.com:7000"}
+                  rows={5}
                   className="w-full bg-gray-100 border border-gray-200 rounded-md p-3 text-xs font-mono font-medium text-gray-900 focus:bg-white focus:border-2 focus:border-[#3B82F6] focus:outline-none transition-all resize-none"
                 />
                 <span className="text-[10px] text-gray-400 font-medium mt-1 block">
-                  Để trống để xóa proxy. Nhiều proxy → chia lần lượt cho từng account. Dùng <code className="bg-gray-100 px-1 rounded">{"{session}"}</code> để sinh IP riêng.
+                  Nhận cả định dạng <code className="bg-gray-100 px-1 rounded">ip:port:user:pass</code> (hệ thống tự đổi sang URL). Chỉ gán cho tài khoản <strong>chưa có proxy</strong> (tài khoản đã có proxy được giữ nguyên), mỗi proxy 1 tài khoản, không lặp vòng. Để trống để xóa proxy tất cả. Dùng <code className="bg-gray-100 px-1 rounded">{"{session}"}</code> để sinh IP riêng.
                 </span>
               </div>
 
@@ -2720,22 +2789,44 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
               </div>
 
               {/* Live preview */}
-              {(() => {
-                const targetAccounts = accounts.filter(a =>
-                  bulkProxyPlatform === "ALL" ? (a.platform === "X" || a.platform === "Threads") : a.platform === bulkProxyPlatform
-                );
+              {bulkProxyLoadingAll ? (
+                <div className="bg-gray-50 border border-gray-200 rounded-md px-3.5 py-3 text-[11px] font-semibold text-gray-500">
+                  Đang tải toàn bộ danh sách tài khoản...
+                </div>
+              ) : (() => {
+                const matching = bulkProxyAllAccounts.filter(bulkProxyPlatformMatch);
+                if (matching.length === 0) return null;
                 const proxyLines = bulkProxyValue.split("\n").map(l => l.trim()).filter(Boolean);
-                if (proxyLines.length === 0 || targetAccounts.length === 0) return null;
-                const isMulti = proxyLines.length > 1;
-                const hasSession = proxyLines.some(p => p.includes("{session}"));
-                if (!isMulti && !hasSession) return null;
+
+                // Ô trống → sẽ xóa proxy của tất cả.
+                if (proxyLines.length === 0) {
+                  return (
+                    <div className="bg-amber-50 border border-amber-200 rounded-md px-3.5 py-3 text-[11px] font-semibold text-amber-700">
+                      ⚠️ Ô proxy đang trống → sẽ <strong>xóa proxy</strong> của tất cả {matching.length} tài khoản {bulkProxyPlatform === "ALL" ? "X + Threads" : bulkProxyPlatform} (kể cả tài khoản đang có proxy).
+                    </div>
+                  );
+                }
+
+                const withProxy = matching.filter(a => a.has_proxy);
+                const targets = matching.filter(a => !a.has_proxy);
+                const assignCount = Math.min(targets.length, proxyLines.length);
+                const leftover = targets.length - assignCount;
+
+                if (targets.length === 0) {
+                  return (
+                    <div className="bg-blue-50 border border-blue-200 rounded-md px-3.5 py-3 text-[11px] font-semibold text-blue-700">
+                      Tất cả {matching.length} tài khoản phù hợp đều đã có proxy — sẽ không gán thêm.
+                    </div>
+                  );
+                }
+
                 return (
                   <div className="bg-blue-50 border border-blue-200 rounded-md px-3.5 py-3 space-y-1.5">
                     <p className="text-[10px] font-extrabold text-blue-700 uppercase tracking-wide">
-                      Preview phân phối ({Math.min(targetAccounts.length, 4)} / {targetAccounts.length} account):
+                      Sẽ gán cho {assignCount} / {targets.length} tài khoản chưa có proxy:
                     </p>
-                    {targetAccounts.slice(0, 4).map((acc, i) => {
-                      const template = proxyLines[i % proxyLines.length];
+                    {targets.slice(0, assignCount).slice(0, 4).map((acc, i) => {
+                      const template = proxyLines[i];
                       const resolved = template.includes("{session}")
                         ? template.replace("{session}", Math.random().toString(36).slice(2, 8))
                         : template;
@@ -2746,19 +2837,18 @@ https://www.threads.net/@lifestyle_vlog sessionid=...
                         </div>
                       );
                     })}
-                    {targetAccounts.length > 4 && (
-                      <p className="text-[10px] text-blue-500 font-semibold">... và {targetAccounts.length - 4} tài khoản khác</p>
+                    {assignCount > 4 && (
+                      <p className="text-[10px] text-blue-500 font-semibold">... và {assignCount - 4} tài khoản nữa</p>
                     )}
-                    {isMulti && proxyLines.length < targetAccounts.length && (
-                      <p className="text-[10px] text-amber-600 font-semibold">⚠️ Ít proxy hơn account — proxy sẽ được lặp vòng.</p>
+                    {withProxy.length > 0 && (
+                      <p className="text-[10px] text-gray-500 font-semibold">↪ Bỏ qua {withProxy.length} tài khoản đã có proxy (giữ nguyên).</p>
+                    )}
+                    {leftover > 0 && (
+                      <p className="text-[10px] text-amber-600 font-semibold">⚠️ Thiếu proxy: còn {leftover} tài khoản chưa có proxy sẽ để trống (không lặp vòng).</p>
                     )}
                   </div>
                 );
               })()}
-
-              <div className="bg-amber-50 border border-amber-200 rounded-md px-3.5 py-3 text-[11px] font-semibold text-amber-700">
-                ⚠️ Thao tác này sẽ ghi đè proxy của <strong>tất cả {accounts.filter(a => bulkProxyPlatform === "ALL" ? (a.platform === "X" || a.platform === "Threads") : a.platform === bulkProxyPlatform).length} tài khoản {bulkProxyPlatform === "ALL" ? "X và Threads" : bulkProxyPlatform}</strong> hiện tại.
-              </div>
               <div className="flex gap-3">
                 <button
                   type="button"

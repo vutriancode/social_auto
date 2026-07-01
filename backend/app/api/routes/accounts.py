@@ -14,6 +14,38 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/accounts", tags=["Social Accounts"])
 
 
+def normalize_proxy_string(proxy: Optional[str]) -> Optional[str]:
+    """Accept common provider proxy formats and store them as a canonical URL.
+
+    Providers frequently hand out `ip:port:user:pass` (or `host:port:user:pass`),
+    but the rest of the system (httpx and Playwright) expects the URL form
+    `http://user:pass@host:port`. Convert on save so users can paste the provider
+    format directly. Anything that already has a scheme (http://, https://,
+    socks5://) is left untouched.
+    """
+    if not proxy:
+        return proxy
+    raw = proxy.strip()
+    if not raw:
+        return None
+    if "://" in raw:
+        return raw  # already a URL — trust it as-is
+    parts = raw.split(":")
+    # host:port:user:pass  (password may itself contain ':')
+    if len(parts) >= 4 and parts[1].isdigit():
+        host, port, user = parts[0], parts[1], parts[2]
+        pwd = ":".join(parts[3:])
+        return f"http://{user}:{pwd}@{host}:{port}"
+    # host:port:user  (username only, no password)
+    if len(parts) == 3 and parts[1].isdigit():
+        return f"http://{parts[2]}@{parts[0]}:{parts[1]}"
+    # host:port  (no auth)
+    if len(parts) == 2 and parts[1].isdigit():
+        return f"http://{raw}"
+    # Unknown shape — ensure a scheme so downstream clients still accept it.
+    return f"http://{raw}"
+
+
 @router.post("/facebook/resolve-token")
 async def resolve_facebook_token(
     body: dict,
@@ -130,7 +162,7 @@ async def create_account(
         "cookie": account_in.cookie,
         "access_token": account_in.access_token,
         "threads_user_id": account_in.threads_user_id,
-        "proxy": account_in.proxy,
+        "proxy": normalize_proxy_string(account_in.proxy),
         "status": "ACTIVE",
         "daily_limit": account_in.daily_limit,
         "hourly_limit": account_in.hourly_limit,
@@ -491,6 +523,7 @@ async def update_account(
     old_account = await get_account_for_user(account_id, current_user)
         
     update_data = {}
+    sent_fields = account_in.model_fields_set
     if account_in.display_name is not None:
         update_data["display_name"] = account_in.display_name
     if account_in.status is not None:
@@ -501,8 +534,11 @@ async def update_account(
         update_data["access_token"] = account_in.access_token
     if account_in.threads_user_id is not None:
         update_data["threads_user_id"] = account_in.threads_user_id
-    if account_in.proxy is not None:
-        update_data["proxy"] = account_in.proxy
+    # Use model_fields_set so an explicit `proxy: null` (clearing the proxy) is
+    # honored — `is not None` would silently ignore it, making proxies impossible
+    # to remove from the edit form / bulk delete.
+    if "proxy" in sent_fields:
+        update_data["proxy"] = normalize_proxy_string(account_in.proxy)
     if account_in.daily_limit is not None:
         update_data["daily_limit"] = account_in.daily_limit
     if account_in.hourly_limit is not None:

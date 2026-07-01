@@ -35,6 +35,8 @@ class AccountOut(BaseModel):
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
     cookie: Optional[str] = None
+    access_token: Optional[str] = None
+    proxy: Optional[str] = None
     has_cookie: bool = False
     has_access_token: bool = False
     has_threads_user_id: bool = False
