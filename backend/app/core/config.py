@@ -16,5 +16,8 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Minimum gap between consecutive comments posted from the same Threads account.
-ACCOUNT_COMMENT_COOLDOWN_SECONDS = 45
+# Random cooldown range between consecutive Threads comments from the same account.
+# Each job reservation picks a random value in [MIN, MAX] to mimic human timing.
+ACCOUNT_COMMENT_COOLDOWN_SECONDS = 120       # kept for backwards compat (used as min)
+ACCOUNT_COMMENT_COOLDOWN_MIN_SECONDS = 120
+ACCOUNT_COMMENT_COOLDOWN_MAX_SECONDS = 300
