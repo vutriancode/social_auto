@@ -158,6 +158,11 @@ export default function Campaigns() {
   const [newFbPost, setNewFbPost] = useState(emptyFbPost);
   const [showAddFbPost, setShowAddFbPost] = useState(false);
 
+  // Facebook CSV/Excel import
+  const [showCsvModal, setShowCsvModal] = useState(false);
+  const [csvPreview, setCsvPreview] = useState<Array<{ content: string; image_url: string; first_comment: string; comment_delay_minutes: number }>>([]);
+  const [csvImporting, setCsvImporting] = useState(false);
+
   const [toasts, setToasts] = useState([]);
   const selectedCampaignIdRef = useRef(null);
   const parsedBulkUrls = extractUrlsFromText(bulkUrls, selectedCampaign?.platform);
@@ -617,6 +622,62 @@ export default function Campaigns() {
       loadDetails(selectedCampaign);
     } catch (err: any) {
       showToast(err.message, "error");
+    }
+  };
+
+  const handleCsvFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const XLSX = await import("xlsx");
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      let dataRows = rows;
+      if (rows.length > 0) {
+        const first = String(rows[0][0] || "").toLowerCase().trim();
+        if (first === "content" || first === "nội dung" || first === "noi dung") {
+          dataRows = rows.slice(1);
+        }
+      }
+      const parsed = dataRows
+        .filter((row) => String(row[0] || "").trim())
+        .map((row) => ({
+          content: String(row[0] || "").trim(),
+          image_url: String(row[1] || "").trim(),
+          first_comment: String(row[2] || "").trim(),
+          comment_delay_minutes: Number(row[3]) || 0,
+        }));
+      setCsvPreview(parsed);
+    } catch {
+      showToast("Không đọc được file. Vui lòng kiểm tra định dạng CSV/Excel.", "error");
+    }
+    e.target.value = "";
+  };
+
+  const handleCsvBulkImport = async () => {
+    if (csvPreview.length === 0 || !selectedCampaign) return;
+    setCsvImporting(true);
+    try {
+      const payload = csvPreview.map((row) => ({
+        content: row.content,
+        image_url: row.image_url || null,
+        first_comment: row.first_comment || null,
+        comment_delay_minutes: row.comment_delay_minutes,
+      }));
+      const res = await apiFetch(`/api/campaigns/${selectedCampaign.id}/templates/facebook/bulk`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setShowCsvModal(false);
+      setCsvPreview([]);
+      showToast(`Đã import ${res.inserted} bài đăng thành công!`);
+      loadDetails(selectedCampaign);
+    } catch (err: any) {
+      showToast(err.message || "Import thất bại", "error");
+    } finally {
+      setCsvImporting(false);
     }
   };
 
@@ -1632,12 +1693,20 @@ export default function Campaigns() {
                     </div>
 
                     {!showAddFbPost && (
-                      <button
-                        onClick={() => setShowAddFbPost(true)}
-                        className="w-full h-10 bg-white hover:bg-indigo-50 border border-indigo-200 text-indigo-600 font-extrabold rounded-lg text-xs transition-all duration-200 cursor-pointer"
-                      >
-                        + Thêm bài đăng mới
-                      </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setShowAddFbPost(true)}
+                          className="h-10 bg-white hover:bg-indigo-50 border border-indigo-200 text-indigo-600 font-extrabold rounded-lg text-xs transition-all duration-200 cursor-pointer"
+                        >
+                          + Thêm bài đăng mới
+                        </button>
+                        <button
+                          onClick={() => setShowCsvModal(true)}
+                          className="h-10 bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-700 font-extrabold rounded-lg text-xs transition-all duration-200 cursor-pointer"
+                        >
+                          📂 Import CSV / Excel
+                        </button>
+                      </div>
                     )}
                   </div>
                 ) : (
@@ -1983,6 +2052,69 @@ export default function Campaigns() {
                 Tạo chiến dịch
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CSV / Excel import modal (Facebook only) */}
+      {showCsvModal && (
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 space-y-4 my-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-extrabold text-gray-900">📂 Import danh sách bài đăng</h3>
+              <button onClick={() => { setShowCsvModal(false); setCsvPreview([]); }} className="text-gray-400 hover:text-gray-600 font-extrabold text-lg leading-none cursor-pointer">✕</button>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-[11px] text-blue-800 space-y-0.5">
+              <p className="font-extrabold mb-1">Định dạng file (.csv / .xlsx / .xls):</p>
+              <p><span className="font-bold">Cột A:</span> Nội dung bài đăng <span className="text-red-500 font-bold">(bắt buộc)</span></p>
+              <p><span className="font-bold">Cột B:</span> URL ảnh (tuỳ chọn)</p>
+              <p><span className="font-bold">Cột C:</span> Comment đính kèm (tuỳ chọn)</p>
+              <p><span className="font-bold">Cột D:</span> Delay comment — số phút (tuỳ chọn, mặc định 0)</p>
+              <p className="text-blue-500 pt-1">Hàng đầu tiên có thể là header (content / nội dung) hoặc dữ liệu — hệ thống tự nhận biết.</p>
+            </div>
+
+            {csvPreview.length === 0 ? (
+              <label className="cursor-pointer block">
+                <div className="border-2 border-dashed border-emerald-300 rounded-xl p-10 text-center hover:bg-emerald-50 transition-colors">
+                  <p className="text-3xl mb-2">📂</p>
+                  <p className="text-sm font-extrabold text-emerald-700">Chọn file CSV hoặc Excel</p>
+                  <p className="text-xs text-gray-400 mt-1">Hỗ trợ .csv, .xlsx, .xls</p>
+                </div>
+                <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleCsvFileChange} />
+              </label>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <p className="text-xs font-bold text-gray-700">
+                    Xem trước: <span className="text-indigo-700 font-extrabold">{csvPreview.length} bài đăng</span>
+                  </p>
+                  <button onClick={() => setCsvPreview([])} className="text-[11px] text-gray-400 hover:text-red-500 font-bold cursor-pointer">Chọn lại</button>
+                </div>
+
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                  {csvPreview.slice(0, 30).map((row, i) => (
+                    <div key={i} className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-[11px] space-y-1">
+                      <p className="font-bold text-gray-900 line-clamp-2">{row.content}</p>
+                      {row.image_url && <p className="text-blue-600 truncate">🖼 {row.image_url}</p>}
+                      {row.first_comment && <p className="text-indigo-600 line-clamp-1">💬 {row.first_comment}</p>}
+                      {row.comment_delay_minutes > 0 && <p className="text-gray-500">⏱ {row.comment_delay_minutes} phút</p>}
+                    </div>
+                  ))}
+                  {csvPreview.length > 30 && (
+                    <p className="text-center text-xs text-gray-400 py-2">... và {csvPreview.length - 30} bài khác</p>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleCsvBulkImport}
+                  disabled={csvImporting}
+                  className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg text-xs transition-all disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {csvImporting ? "Đang import..." : `✓ Import ${csvPreview.length} bài đăng`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

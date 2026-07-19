@@ -699,6 +699,38 @@ async def import_templates(
     return inserted_templates
 
 
+@router.post("/{campaign_id}/templates/facebook/bulk", status_code=status.HTTP_201_CREATED)
+async def create_facebook_templates_bulk(
+    campaign_id: str,
+    templates_in: List[FacebookTemplateCreate],
+    current_user: dict = Depends(get_current_user)
+):
+    db = get_db()
+    campaign = await get_campaign_for_user(campaign_id, current_user)
+    now = datetime.utcnow()
+    docs = []
+    for t in templates_in:
+        if not t.content.strip():
+            continue
+        docs.append({
+            "campaign_id": ObjectId(campaign_id),
+            "content": t.content.strip(),
+            "image_url": t.image_url.strip() if t.image_url else None,
+            "first_comment": t.first_comment.strip() if t.first_comment else None,
+            "comment_delay_minutes": t.comment_delay_minutes or 0,
+            "category": "General",
+            "language": "vi",
+            "priority": "MEDIUM",
+            "status": "ACTIVE",
+            "created_at": now,
+        })
+    if not docs:
+        raise HTTPException(status_code=400, detail="No valid templates provided")
+    await db.comment_templates.insert_many(docs)
+    await refresh_campaign_readiness(ObjectId(campaign_id), campaign["status"])
+    return {"inserted": len(docs)}
+
+
 @router.post("/{campaign_id}/templates/facebook", response_model=CommentTemplateOut, status_code=status.HTTP_201_CREATED)
 async def create_facebook_template(
     campaign_id: str,
